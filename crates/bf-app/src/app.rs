@@ -16,6 +16,7 @@ use bf_decode::engine::Engine;
 use bf_decode::Format;
 use bf_device::session::{Phase, Session, SessionResult, TriggerKind, TriggerPlan};
 use bf_device::sim::SimDevice;
+use bf_device::litex::LitexDevice;
 use bf_device::stock::StockDevice;
 use bf_device::{CaptureConfig, Device, Pattern};
 use std::time::{Duration, Instant};
@@ -31,6 +32,7 @@ enum DeviceChoice {
     Sim,
     SimRealtime,
     Stock,
+    Litex,
 }
 
 impl DeviceChoice {
@@ -39,6 +41,7 @@ impl DeviceChoice {
             DeviceChoice::Sim => "Simulator (fast)",
             DeviceChoice::SimRealtime => "Simulator (real time)",
             DeviceChoice::Stock => "SLogic16U3 (stock firmware)",
+            DeviceChoice::Litex => "SLogic16U3 (LiteX gateware)",
         }
     }
 
@@ -49,6 +52,9 @@ impl DeviceChoice {
             DeviceChoice::Stock => {
                 StockDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string())
             }
+            DeviceChoice::Litex => {
+                LitexDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string())
+            }
         }
     }
 
@@ -57,6 +63,7 @@ impl DeviceChoice {
         match self {
             DeviceChoice::Sim | DeviceChoice::SimRealtime => &[Pattern::Generator, Pattern::Counter, Pattern::Inputs],
             DeviceChoice::Stock => &[Pattern::Inputs, Pattern::Counter, Pattern::Emulation],
+            DeviceChoice::Litex => &[Pattern::Inputs, Pattern::Counter, Pattern::Generator],
         }
     }
 
@@ -219,7 +226,8 @@ pub struct App {
     continuous: bool,
     samples: f64,
     threshold: f64,
-    stock_seen: (Instant, bool),
+    /// When the attached analyzers were last looked for, and whether a stock / LiteX one is there.
+    stock_seen: (Instant, bool, bool),
 
     layout: Layout,
     layout_touched: bool,
@@ -302,7 +310,7 @@ impl App {
             continuous: true,
             samples: 10e6,
             threshold: 1.7,
-            stock_seen: (Instant::now() - Duration::from_secs(10), false),
+            stock_seen: (Instant::now() - Duration::from_secs(10), false, false),
             layout: Layout::generator(16),
             layout_touched: false,
             selected: None,
@@ -375,7 +383,11 @@ impl App {
         let Some(channels) = ChannelCount::new(self.channels_n) else { return };
         let n = self.channels_n as usize;
         if !self.layout_touched || self.layout.names.len() != n {
-            self.layout = if self.pattern == Pattern::Generator { Layout::generator(n) } else { Layout::new(n) };
+            self.layout = match (self.pattern, self.device) {
+                (Pattern::Generator, DeviceChoice::Litex) => Layout::litex_generator(n),
+                (Pattern::Generator, _) => Layout::generator(n),
+                _ => Layout::new(n),
+            };
             self.layout_touched = false;
             self.selected = None;
             let ids: Vec<u32> = self.decoders.iter().map(|e| e.handle.id.0).collect();
@@ -601,9 +613,9 @@ impl App {
         let running = self.running();
         // Look for an attached analyzer once a second while idle.
         if !running && self.stock_seen.0.elapsed() > Duration::from_secs(1) {
-            self.stock_seen = (Instant::now(), !StockDevice::available().is_empty());
+            self.stock_seen = (Instant::now(), !StockDevice::available().is_empty(), !LitexDevice::available().is_empty());
         }
-        let stock_present = self.stock_seen.1;
+        let (stock_present, litex_present) = (self.stock_seen.1, self.stock_seen.2);
         let dim = |t: &str| RichText::new(t.to_string()).color(theme::TEXT_DIM);
         ui.horizontal_wrapped(|ui| {
             let run = egui::Button::new(RichText::new("Run  F5").color(if running { theme::TEXT_DIM } else { theme::RUN }));
@@ -618,8 +630,13 @@ impl App {
             ui.add_enabled_ui(!running, |ui| {
                 ui.label(dim("Device"));
                 egui::ComboBox::from_id_salt("device").selected_text(self.device.label()).show_ui(ui, |ui| {
-                    for d in [DeviceChoice::Stock, DeviceChoice::SimRealtime, DeviceChoice::Sim] {
-                        if d != DeviceChoice::Stock || stock_present || self.device == d {
+                    for d in [DeviceChoice::Stock, DeviceChoice::Litex, DeviceChoice::SimRealtime, DeviceChoice::Sim] {
+                        let present = match d {
+                            DeviceChoice::Stock => stock_present,
+                            DeviceChoice::Litex => litex_present,
+                            _ => true,
+                        };
+                        if present || self.device == d {
                             ui.selectable_value(&mut self.device, d, d.label());
                         }
                     }

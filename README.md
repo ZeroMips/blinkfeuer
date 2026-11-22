@@ -17,7 +17,9 @@ A working first version. What is verified and what is not:
 - **Simulator**: everything below works on it, and most of it is covered by tests.
 - **SLogic16U3 with the stock firmware**: acquisition has been run on hardware at full rate with the
   analyzer's own test patterns, with exact sample counts. **Not yet tried with real probe signals.**
-- **LiteX gateware backend** (the open gateware for the same hardware): not implemented yet.
+- **LiteX gateware backend** (the open gateware for the same hardware, `bfcli --device litex`, selectable in the
+  application when the analyzer runs it): written from the gateware's own library and tested against a fake
+  register file, but **not yet run on the real device**. Everything except the USB calls is covered by tests.
 - Linux only.
 
 ## Features
@@ -64,13 +66,15 @@ analyzer does not show up on a port that worked before, rebinding the host contr
 | Crate | What it holds |
 |---|---|
 | `bf-core` | Sample formats, the capture store (sparse change events plus per-block summaries), trigger conditions |
-| `bf-device` | The device interface, the simulator, the stock-firmware backend, the capture session with the trigger logic |
+| `bf-device` | The device interface, the simulator, the stock-firmware and LiteX-gateware backends, the capture session with the trigger logic |
 | `bf-decode` | UART, SPI and I2C decoders, the decoding engine, protocol triggers |
 | `bf-io` | Capture file format and VCD export |
 | `bf-app` | The application (`blinkfeuer`) and the command line tool (`bfcli`) |
 
 The protocol of the stock firmware is implemented from Sipeed's written description in the
 [SLogic repository](https://github.com/sipeed/SLogic); no code was taken from their GPL-licensed driver.
+The LiteX backend follows the register map and transport of the gateware's own BSD-2-Clause library
+(libslogic16u3, Enjoy-Digital).
 
 ## Licence
 

@@ -3,6 +3,7 @@
 //! store. Backends handle everything device specific (control protocol, first-sample quirks, transfer
 //! rings, stall recovery).
 
+pub mod litex;
 pub mod sim;
 pub mod session;
 pub mod stock;

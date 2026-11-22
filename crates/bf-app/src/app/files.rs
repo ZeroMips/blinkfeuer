@@ -81,11 +81,12 @@ impl DeviceChoice {
             DeviceChoice::Sim => "sim",
             DeviceChoice::SimRealtime => "sim-realtime",
             DeviceChoice::Stock => "stock",
+            DeviceChoice::Litex => "litex",
         }
     }
 
     fn from_key(k: &str) -> Option<Self> {
-        [DeviceChoice::Sim, DeviceChoice::SimRealtime, DeviceChoice::Stock].into_iter().find(|d| d.key() == k)
+        [DeviceChoice::Sim, DeviceChoice::SimRealtime, DeviceChoice::Stock, DeviceChoice::Litex].into_iter().find(|d| d.key() == k)
     }
 }
 

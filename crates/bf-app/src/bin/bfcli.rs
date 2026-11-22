@@ -3,6 +3,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use bf_core::{CaptureStore, ChannelCount, StoreConfig};
 use bf_device::sim::SimDevice;
+use bf_device::litex::LitexDevice;
 use bf_device::stock::StockDevice;
 use bf_device::session::Session;
 use bf_device::{CaptureConfig, Device, Pattern, ReadResult};
@@ -29,7 +30,7 @@ enum Cmd {
     Devices,
     /// Capture into memory and print statistics.
     Capture {
-        /// Device: `sim` (simulator, as fast as possible), `sim-rt` (paced in real time) or `stock` (SLogic16U3).
+        /// Device: `sim` (simulator, as fast as possible), `sim-rt` (paced in real time) or `stock` (SLogic16U3, stock firmware) or `litex` (SLogic16U3, open gateware).
         #[arg(long, default_value = "sim")]
         device: String,
         /// Channels (4, 8 or 16).
@@ -124,7 +125,8 @@ fn open_device(name: &str) -> Result<Box<dyn Device>, String> {
         "sim" => Ok(Box::new(SimDevice::new(false))),
         "sim-rt" => Ok(Box::new(SimDevice::new(true))),
         "stock" => StockDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string()),
-        other => Err(format!("unknown device '{other}' (available: sim, sim-rt, stock)")),
+        "litex" => LitexDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string()),
+        other => Err(format!("unknown device '{other}' (available: sim, sim-rt, stock, litex)")),
     }
 }
 
@@ -145,6 +147,9 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             for d in StockDevice::available() {
                 println!("{:8} {} ({}, {})", "stock", d.name, d.backend, d.id);
+            }
+            for d in LitexDevice::available() {
+                println!("{:8} {} ({}, {})", "litex", d.name, d.backend, d.id);
             }
             Ok(())
         }

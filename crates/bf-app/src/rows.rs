@@ -270,6 +270,24 @@ impl Layout {
         l
     }
 
+    /// Names and one bus for the gateware's own generator pattern: CH0 UART, CH1-3 SPI, CH4 PWM, CH5 the
+    /// 100 MHz clock, CH6-15 a 10-bit Gray counter.
+    pub fn litex_generator(channels: usize) -> Self {
+        const NAMES: [&str; 6] = ["UART", "SPI CS#", "SPI SCK", "SPI MOSI", "PWM", "CLK 100 MHz"];
+        let mut l = Self::new(channels);
+        for (i, n) in l.names.iter_mut().enumerate() {
+            *n = match NAMES.get(i) {
+                Some(s) => (*s).to_string(),
+                None => format!("GRAY{}", i - NAMES.len()),
+            };
+        }
+        if channels == 16 {
+            let members: Vec<u8> = (6..16).rev().collect();
+            l.add_bus("GRAY", members, Radix::Hex).expect("generator bus");
+        }
+        l
+    }
+
     /// The visible rows, top to bottom, without protocol decoders.
     #[cfg(test)]
     pub fn rows(&self) -> Vec<Row> {
@@ -1109,5 +1127,18 @@ mod tests {
         let g = l.items.iter().position(|it| matches!(it, Item::Group(_))).unwrap();
         l.remove_bus(g);
         assert_eq!(names(&l, &none), ["2", "bus", " 1", " 0", "3"], "signals first, then buses, where the group was");
+    }
+
+    #[test]
+    fn litex_generator_layout_has_its_ten_bit_gray_bus() {
+        let l = Layout::litex_generator(16);
+        assert_eq!(l.names[0], "UART");
+        assert_eq!(l.names[5], "CLK 100 MHz");
+        assert_eq!(l.names[6], "GRAY0");
+        assert_eq!(l.names[15], "GRAY9");
+        let rows = l.rows();
+        assert_eq!(rows.len(), 7);
+        assert_eq!(l.row_label(&rows[6]), "GRAY [15:6]");
+        assert_eq!(Layout::litex_generator(8).rows().len(), 8);
     }
 }

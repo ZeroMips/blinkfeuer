@@ -172,12 +172,17 @@ const MIB: usize = 1024 * KIB;
 /// About 5 ms of data per transfer (32 KiB .. 2 MiB, 32 KiB aligned), at least 4 in flight within the
 /// default Linux usbfs budget; a finite capture smaller than one transfer gets one of its own size.
 pub fn plan_ring(rate: f64, channels: u8, limit_bytes: Option<u64>) -> RingPlan {
+    plan_ring_with(rate, channels, limit_bytes, FIRST_DROP_BYTES)
+}
+
+/// [`plan_ring`] for a stream that has `first_drop` extra bytes at its head.
+pub fn plan_ring_with(rate: f64, channels: u8, limit_bytes: Option<u64>, first_drop: usize) -> RingPlan {
     let byte_rate = rate * channels as f64 / 8.0;
     let ideal = (byte_rate * 0.005) as usize;
     let mut xfer = ideal.clamp(32 * KIB, 2 * MIB).div_ceil(32 * KIB) * 32 * KIB;
     let mut count = (12 * MIB / xfer).clamp(4, 16);
     if let Some(lb) = limit_bytes {
-        let need = lb as usize + FIRST_DROP_BYTES;
+        let need = lb as usize + first_drop;
         if need < xfer {
             xfer = need.div_ceil(KIB) * KIB; // a multiple of the SuperSpeed bulk packet size
         }
@@ -216,11 +221,11 @@ impl Accounting {
 // ------------------------------------------------------------------------------------------------
 // USB.
 
-fn usb_err(what: &str, e: impl std::fmt::Display) -> DeviceError {
+pub(crate) fn usb_err(what: &str, e: impl std::fmt::Display) -> DeviceError {
     DeviceError::Usb(format!("{what}: {e}"))
 }
 
-fn transfer_err(e: &TransferError) -> DeviceError {
+pub(crate) fn transfer_err(e: &TransferError) -> DeviceError {
     match e {
         TransferError::Disconnected => DeviceError::Disconnected,
         other => DeviceError::Usb(other.to_string()),
@@ -273,7 +278,7 @@ impl RegIo for UsbRegs {
 }
 
 /// Throw away whatever the endpoint still delivers (after STOP, or from a killed earlier capture).
-fn drain(ep: &mut Endpoint<Bulk, In>) {
+pub(crate) fn drain(ep: &mut Endpoint<Bulk, In>) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         ep.submit(ep.allocate(64 * KIB));
