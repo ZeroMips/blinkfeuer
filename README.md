@@ -39,7 +39,8 @@ A working first version. What is verified and what is not:
   drag and drop reordering, hiding rows. Decoders can sit inside groups.
 - **Protocol decoders** for UART, SPI and I2C, written to be fast (cost proportional to the number of
   edges, not samples), with a setup screen that shows example traces for the chosen settings. UART
-  characters are also grouped into readable telegrams.
+  characters are also grouped into readable telegrams, and the UART baud rate can be detected from the
+  capture (also in the trigger setup).
 - **Annotation table** of decoded items with search; clicking in the table moves the waveform and vice versa.
 - **Triggers** (done on the host, the analyzer has none in hardware): level and edge conditions on any
   channels, or a protocol trigger (UART text or error, SPI word with a bit mask, I2C address, START/STOP,

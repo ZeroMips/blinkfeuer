@@ -67,6 +67,8 @@ pub struct Opts {
     pub trigger_mode: Option<String>,
     pub trigger_window: bool,
     pub measure_window: bool,
+    /// Press "Detect" for the UART baud rate once the demo capture is done (screenshots).
+    pub detect_baud: bool,
     pub save_capture: Option<String>,
 }
 
@@ -117,6 +119,7 @@ fn parse_opts() -> Opts {
             "--memory-mib" => o.memory_mib = Some(val().parse().expect("--memory-mib N")),
             "--trigger-window" => o.trigger_window = true,
             "--measure-window" => o.measure_window = true,
+            "--detect-baud" => o.detect_baud = true,
             "--open" => o.open = Some(val()),
             "--save-capture" => o.save_capture = Some(val()),
             "--dragging" => o.dragging = Some(val().parse().expect("--dragging ROW")),

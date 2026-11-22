@@ -6,6 +6,7 @@
 //! live decoding works) and allocation free per edge; annotations are small `Copy` records whose text
 //! is only produced when something is drawn.
 
+pub mod baud;
 pub mod engine;
 pub mod i2c;
 pub mod spi;

@@ -79,6 +79,7 @@ mod help {
     pub const FORMAT: &str = "How data values are displayed: hexadecimal, decimal, binary or ASCII (characters; control codes as \\r, \\n ...). Only changes the display, not the decoding.";
 
     pub const UART_RX: &str = "Channel that carries the serial data. Connect it to the TX pin of the device under test. The line idles high (low if 'Inverted' is on).";
+    pub const UART_DETECT: &str = "Measures the pulse widths on the RX channel of the current capture (between M1 and M2 when both markers are set, else all of it) and suggests the baud rate. It needs UART traffic in the capture and a sample rate of about 8 times the baud rate or more.";
     pub const UART_BAUD: &str = "Bit rate in bits per second (9600, 115200, ...). The decoder uses sample rate / baud samples per bit, so a wrong value gives garbage or framing errors (FE). Capture at no less than about 8 times the baud rate.";
     pub const UART_BITS: &str = "Data bits per frame, 5 to 9 (usually 8).";
     pub const UART_PARITY: &str = "Extra bit after the data bits. Even/Odd: the number of 1 bits including the parity bit is even/odd. Mark: always 1. Space: always 0. A wrong parity bit is flagged PE; the byte is still shown.";
@@ -184,13 +185,19 @@ pub fn validate(cfg: &Config) -> Option<String> {
     }
 }
 
-/// Edit a decoder's settings; true when anything changed.
-pub fn config_ui(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[String]) -> bool {
-    config_ui_with(ui, id, cfg, names, true)
+/// Baud rate detection between the settings and the application, which owns the capture: the settings
+/// ask by setting `request`, the application answers in `result`.
+#[derive(Default)]
+pub struct BaudProbe {
+    /// Detect the baud rate on this channel.
+    pub request: Option<u8>,
+    /// The last answer and the channel it was for.
+    pub result: Option<(u8, Result<bf_decode::baud::BaudGuess, String>)>,
 }
 
-/// Like [`config_ui`]; `telegrams: false` leaves out what only matters for display (a trigger does not).
-pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[String], telegrams: bool) -> bool {
+/// Edit a decoder's settings; true when anything changed. `telegrams: false` leaves out what only matters
+/// for display (a trigger does not need it); a `probe` adds baud rate detection to UART settings.
+pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[String], telegrams: bool, mut probe: Option<&mut BaudProbe>) -> bool {
     let mut changed = false;
     match cfg {
         Config::Uart(c) => {
@@ -204,6 +211,44 @@ pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[St
                     changed |= param(ui, "Baud rate", help::UART_BAUD, |ui| {
                         ui.add(egui::DragValue::new(&mut c.baud).speed(100.0).range(300.0..=20e6).suffix(" baud"))
                     });
+                    if let Some(probe) = probe.as_deref_mut() {
+                        changed |= param(ui, "Auto-detect", help::UART_DETECT, |ui| {
+                            let mut used = false;
+                            let mut r = ui
+                                .horizontal(|ui| {
+                                    if ui.button("Detect").clicked() {
+                                        probe.request = Some(c.rx);
+                                    }
+                                    match &probe.result {
+                                        Some((rx, Ok(g))) if *rx == c.rx => {
+                                            let text = if g.snapped {
+                                                format!("{} baud", g.baud)
+                                            } else {
+                                                format!("{} baud (not a standard rate)", g.baud)
+                                            };
+                                            ui.label(text);
+                                            ui.label(RichText::new(format!("fit {:.0} %, {} pulses", g.fit * 100.0, g.widths)).color(theme::TEXT_DIM));
+                                            if ui.button("Use").clicked() {
+                                                c.baud = g.baud;
+                                                used = true;
+                                            }
+                                            if let Some(n) = &g.note {
+                                                ui.label(RichText::new(n.as_str()).color(theme::DEC_WARN));
+                                            }
+                                        }
+                                        Some((rx, Err(e))) if *rx == c.rx => {
+                                            ui.colored_label(theme::DEC_ERR, e);
+                                        }
+                                        _ => {}
+                                    }
+                                })
+                                .response;
+                            if used {
+                                r.mark_changed();
+                            }
+                            r
+                        });
+                    }
                     changed |= param(ui, "Data bits", help::UART_BITS, |ui| ui.add(egui::DragValue::new(&mut c.data_bits).range(5..=9)));
                     changed |= param(ui, "Parity", help::UART_PARITY, |ui| {
                         let mut ch = false;
@@ -289,6 +334,7 @@ pub enum Action {
 #[derive(Default)]
 pub struct SetupState {
     pub selected: usize,
+    pub probe: BaudProbe,
     cache: Option<(Config, Vec<String>, crate::decode_preview::Preview)>,
 }
 
@@ -405,7 +451,7 @@ pub fn setup_ui(ui: &mut egui::Ui, st: &mut SetupState, entries: &mut [Entry], n
                     });
                 });
                 let mut cfg = e.cfg.clone();
-                if config_ui(ui, &format!("d{}", e.handle.id.0), &mut cfg, names) {
+                if config_ui_with(ui, &format!("d{}", e.handle.id.0), &mut cfg, names, true, Some(&mut st.probe)) {
                     e.cfg = cfg;
                     actions.push(Action::Rebuild(i));
                 }

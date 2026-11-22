@@ -242,6 +242,8 @@ pub struct App {
     show_table: bool,
     show_trigger: bool,
     show_measure: bool,
+    /// Baud rate detection for the UART settings of the trigger window.
+    trigger_probe: decode_ui::BaudProbe,
     measure: crate::measure_ui::MeasureState,
     /// Times are counted from the trigger sample (when the capture has one) instead of its start.
     zero_at_trigger: bool,
@@ -281,6 +283,7 @@ pub struct App {
     zoom_applied: bool,
     goto_done: bool,
     open_done: bool,
+    detect_pressed: bool,
     save_done: bool,
 
     // files
@@ -325,6 +328,7 @@ impl App {
             show_table: false,
             show_trigger: false,
             show_measure: false,
+            trigger_probe: Default::default(),
             measure: Default::default(),
             zero_at_trigger: true,
             memory_mib: default_memory_mib(),
@@ -355,6 +359,7 @@ impl App {
             zoom_applied: false,
             goto_done: false,
             open_done: false,
+            detect_pressed: false,
             save_done: false,
             file: None,
             last_dir: None,
@@ -1629,9 +1634,37 @@ impl App {
         let n = self.channels_n as usize;
         let (rate, continuous) = (self.rate, self.continuous);
         egui::Window::new("Trigger").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-            crate::trigger_ui::contents(ui, &mut self.trigger, &mut self.memory_mib, &names, n, rate, continuous);
+            crate::trigger_ui::contents(ui, &mut self.trigger, &mut self.trigger_probe, &mut self.memory_mib, &names, n, rate, continuous);
         });
         self.show_trigger = open;
+        if let Some(rx) = self.trigger_probe.request.take() {
+            self.trigger_probe.result = Some((rx, self.detect_baud(rx)));
+        }
+    }
+
+    /// Detect the baud rate of the UART on channel `rx`: between the markers if both are set, else
+    /// over the whole capture.
+    fn detect_baud(&self, rx: u8) -> Result<bf_decode::baud::BaudGuess, String> {
+        const MAX_EDGES: usize = 300_000;
+        let store = self.store.read();
+        if store.is_empty() {
+            return Err("no capture yet: run one or open a file first".into());
+        }
+        if rx >= store.channels() {
+            return Err(format!("channel {rx} is not in the capture"));
+        }
+        let all = store.range();
+        let range = match (self.markers.m1, self.markers.m2) {
+            (Some(a), Some(b)) => (a.min(b).max(all.start as f64).floor() as u64)..(a.max(b).min(all.end as f64).ceil() as u64),
+            _ => all,
+        };
+        let mut edges: Vec<u64> = Vec::new();
+        store.toggles(rx, range, |p, _| {
+            if edges.len() < MAX_EDGES {
+                edges.push(p);
+            }
+        });
+        bf_decode::baud::detect(&edges, store.sample_rate())
     }
 
     fn decoders_window(&mut self, ctx: &egui::Context) {
@@ -1664,6 +1697,9 @@ impl App {
                 }
             });
         self.show_decoders = open;
+        if let Some(rx) = self.setup.probe.request.take() {
+            self.setup.probe.result = Some((rx, self.detect_baud(rx)));
+        }
     }
 
     fn table_panel(&mut self, ui: &mut egui::Ui) {
@@ -1707,6 +1743,10 @@ impl App {
 
     fn handle_demo_and_screenshot(&mut self, ctx: &egui::Context) {
         self.show_measure |= self.opts.measure_window;
+        if self.opts.detect_baud && !self.detect_pressed && self.autostarted && !self.running() && self.last_result.is_some() {
+            self.detect_pressed = true;
+            self.setup.probe.request = Some(0);
+        }
         if let (Some(p), false) = (self.opts.open.clone(), self.open_done) {
             self.open_done = true;
             self.file_chosen(files::Purpose::OpenCapture, p.into());

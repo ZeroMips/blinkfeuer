@@ -1,6 +1,6 @@
 //! The contents of the Trigger window: pattern conditions per channel, or a protocol to look for.
 
-use crate::decode_ui::{self, Config};
+use crate::decode_ui::{self, BaudProbe, Config};
 use crate::setup::{Direction, I2cWhat, ProtocolSetup, Span, SpanUnit, TriggerMode, TriggerSetup, UartWhat};
 use bf_decode::trigger::TriggerAt;
 use crate::theme;
@@ -31,7 +31,7 @@ fn span_ui(ui: &mut egui::Ui, id: &str, span: &mut Span) {
     });
 }
 
-pub fn contents(ui: &mut egui::Ui, t: &mut TriggerSetup, memory_mib: &mut u64, names: &[String], n: usize, rate: f64, continuous: bool) {
+pub fn contents(ui: &mut egui::Ui, t: &mut TriggerSetup, probe: &mut BaudProbe, memory_mib: &mut u64, names: &[String], n: usize, rate: f64, continuous: bool) {
     ui.checkbox(&mut t.enabled, "Wait for the trigger before the capture ends");
     ui.horizontal(|ui| {
         dim(ui, "Trigger on");
@@ -42,7 +42,7 @@ pub fn contents(ui: &mut egui::Ui, t: &mut TriggerSetup, memory_mib: &mut u64, n
     ui.separator();
     match t.mode {
         TriggerMode::Pattern => pattern(ui, t, names, n),
-        TriggerMode::Uart => uart(ui, t, names),
+        TriggerMode::Uart => uart(ui, t, probe, names),
         TriggerMode::Spi => spi(ui, t, names),
         TriggerMode::I2c => i2c(ui, t, names),
     }
@@ -133,11 +133,11 @@ fn protocol_note(ui: &mut egui::Ui) {
     dim(ui, "Set the same channels and frame format as the signal has.");
 }
 
-fn uart(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
+fn uart(ui: &mut egui::Ui, t: &mut TriggerSetup, probe: &mut BaudProbe, names: &[String]) {
     protocol_note(ui);
     let p = &mut t.protocol;
     let mut cfg = Config::Uart(p.uart.clone());
-    if decode_ui::config_ui_with(ui, "trg_uart", &mut cfg, names, false) {
+    if decode_ui::config_ui_with(ui, "trg_uart", &mut cfg, names, false, Some(probe)) {
         if let Config::Uart(c) = cfg {
             p.uart = c;
         }
@@ -175,7 +175,7 @@ fn spi(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
     protocol_note(ui);
     let p = &mut t.protocol;
     let mut cfg = Config::Spi(p.spi.clone());
-    if decode_ui::config_ui_with(ui, "trg_spi", &mut cfg, names, false) {
+    if decode_ui::config_ui_with(ui, "trg_spi", &mut cfg, names, false, None) {
         if let Config::Spi(c) = cfg {
             p.spi = c;
         }
@@ -204,7 +204,7 @@ fn i2c(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
     protocol_note(ui);
     let p = &mut t.protocol;
     let mut cfg = Config::I2c(p.i2c.clone());
-    if decode_ui::config_ui_with(ui, "trg_i2c", &mut cfg, names, false) {
+    if decode_ui::config_ui_with(ui, "trg_i2c", &mut cfg, names, false, None) {
         if let Config::I2c(c) = cfg {
             p.i2c = c;
         }
