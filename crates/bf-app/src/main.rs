@@ -2,6 +2,7 @@ mod app;
 mod decode_preview;
 mod decode_ui;
 mod markers;
+mod measure_ui;
 mod rows;
 mod setup;
 mod theme;
@@ -65,6 +66,7 @@ pub struct Opts {
     /// Protocol trigger for the demo capture: uart, spi or i2c (default settings fit the generator pattern).
     pub trigger_mode: Option<String>,
     pub trigger_window: bool,
+    pub measure_window: bool,
     pub save_capture: Option<String>,
 }
 
@@ -114,6 +116,7 @@ fn parse_opts() -> Opts {
             "--post-ms" => o.post_ms = Some(val().parse().expect("--post-ms MS")),
             "--memory-mib" => o.memory_mib = Some(val().parse().expect("--memory-mib N")),
             "--trigger-window" => o.trigger_window = true,
+            "--measure-window" => o.measure_window = true,
             "--open" => o.open = Some(val()),
             "--save-capture" => o.save_capture = Some(val()),
             "--dragging" => o.dragging = Some(val().parse().expect("--dragging ROW")),

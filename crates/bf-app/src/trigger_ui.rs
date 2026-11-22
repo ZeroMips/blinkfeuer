@@ -1,7 +1,8 @@
 //! The contents of the Trigger window: pattern conditions per channel, or a protocol to look for.
 
 use crate::decode_ui::{self, Config};
-use crate::setup::{Direction, I2cWhat, Span, SpanUnit, TriggerMode, TriggerSetup, UartWhat};
+use crate::setup::{Direction, I2cWhat, ProtocolSetup, Span, SpanUnit, TriggerMode, TriggerSetup, UartWhat};
+use bf_decode::trigger::TriggerAt;
 use crate::theme;
 use crate::view::format_split;
 use egui::RichText;
@@ -117,6 +118,16 @@ fn pattern(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String], n: usize) 
     }
 }
 
+/// Which sample of the match is the trigger.
+fn trigger_point(ui: &mut egui::Ui, p: &mut ProtocolSetup) {
+    ui.add_space(6.0);
+    ui.label(RichText::new("Trigger point").color(theme::TEXT).strong());
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut p.trigger_at, TriggerAt::Start, "Start of the match").on_hover_text("The first sample of the matched item (of a byte sequence: of its first byte)");
+        ui.selectable_value(&mut p.trigger_at, TriggerAt::End, "End of the match").on_hover_text("The last sample of the matched item");
+    });
+}
+
 fn protocol_note(ui: &mut egui::Ui) {
     dim(ui, "A decoder runs on the live data; the trigger is the end of the first match.");
     dim(ui, "Set the same channels and frame format as the signal has.");
@@ -157,6 +168,7 @@ fn uart(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
         entry(ui, &mut p.uart_bytes, 260.0, err.as_deref());
         dim(ui, if p.uart_ascii { "Escapes: \\r \\n \\t \\0 \\\\ \\xNN. Characters must follow each other directly." } else { "Hex bytes, e.g. 4F 4B 0D 0A. Characters must follow each other directly." });
     }
+    trigger_point(ui, p);
 }
 
 fn spi(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
@@ -185,6 +197,7 @@ fn spi(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
         ui.end_row();
     });
     dim(ui, "Bits that are 0 in the second field are ignored (FF = all bits, 0F = low nibble only).");
+    trigger_point(ui, p);
 }
 
 fn i2c(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
@@ -220,4 +233,5 @@ fn i2c(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
         }
         _ => {}
     }
+    trigger_point(ui, p);
 }

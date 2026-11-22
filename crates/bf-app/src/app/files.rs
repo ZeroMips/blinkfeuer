@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::setup::{self, DecoderSetup, Setup};
-use bf_io::{read_capture, write_capture, write_vcd, VcdSignal};
+use bf_io::{read_capture, read_sr, write_capture, write_vcd, VcdSignal};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -114,6 +114,26 @@ fn write_via_temp(path: &Path, f: impl FnOnce(&mut BufWriter<std::fs::File>) -> 
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Read a capture file: a Blinkfeuer capture, or a sigrok session (recognised by being a zip archive),
+/// whose probe names become the channel names.
+fn load_capture_file(path: &Path) -> Result<(CaptureStore, serde_json::Value), String> {
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut magic = [0u8; 4];
+    let zip = std::io::Read::read_exact(&mut file, &mut magic).is_ok() && &magic == b"PK\x03\x04";
+    std::io::Seek::rewind(&mut file).map_err(|e| e.to_string())?;
+    if zip {
+        let c = read_sr(BufReader::with_capacity(1 << 20, file)).map_err(|e| e.to_string())?;
+        let n = c.store.channels();
+        let mut layout = Layout::new(n as usize);
+        layout.names = c.names;
+        let setup = Setup { version: setup::VERSION, channels: Some(n), rate: Some(c.sample_rate), layout: Some(layout), ..Default::default() };
+        Ok((c.store, setup.to_json()))
+    } else {
+        let l = read_capture(BufReader::with_capacity(1 << 20, file)).map_err(|e| e.to_string())?;
+        Ok((l.store, l.setup))
+    }
 }
 
 impl App {
@@ -308,7 +328,14 @@ impl App {
         let name = self.file.as_ref().and_then(|f| f.file_stem()).map(|s| format!("{}.{}", s.to_string_lossy(), p.filter().1));
         std::thread::spawn(move || {
             let (label, ext) = p.filter();
-            let mut d = rfd::FileDialog::new().set_title(p.title()).add_filter(label, &[ext]).add_filter("All files", &["*"]);
+            let mut d = rfd::FileDialog::new().set_title(p.title());
+            d = if p == Purpose::OpenCapture {
+                // Blinkfeuer captures and sigrok sessions (PulseView, sigrok-cli).
+                d.add_filter("Captures (.bfc, .sr)", &["bfc", "sr"]).add_filter(label, &[ext]).add_filter("sigrok session", &["sr"])
+            } else {
+                d.add_filter(label, &[ext])
+            };
+            d = d.add_filter("All files", &["*"]);
             if let Some(dir) = dir {
                 d = d.set_directory(dir);
             }
@@ -374,12 +401,9 @@ impl App {
         match p {
             Purpose::OpenCapture => {
                 let path2 = path.clone();
-                self.spawn_job(format!("Loading {name}"), move || {
-                    let r = std::fs::File::open(&path2).map_err(|e| e.to_string()).and_then(|f| read_capture(BufReader::with_capacity(1 << 20, f)).map_err(|e| e.to_string()));
-                    match r {
-                        Ok(l) => JobResult::Loaded { path: path2, store: Box::new(l.store), setup: l.setup },
-                        Err(e) => JobResult::Failed(format!("{name}: {e}")),
-                    }
+                self.spawn_job(format!("Loading {name}"), move || match load_capture_file(&path2) {
+                    Ok((store, setup)) => JobResult::Loaded { path: path2, store: Box::new(store), setup },
+                    Err(e) => JobResult::Failed(format!("{name}: {e}")),
                 });
             }
             Purpose::SaveCapture => {

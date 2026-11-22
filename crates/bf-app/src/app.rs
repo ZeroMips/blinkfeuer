@@ -241,6 +241,8 @@ pub struct App {
     show_decoders: bool,
     show_table: bool,
     show_trigger: bool,
+    show_measure: bool,
+    measure: crate::measure_ui::MeasureState,
     /// Times are counted from the trigger sample (when the capture has one) instead of its start.
     zero_at_trigger: bool,
     /// Memory the capture may use, in MiB (a capture with a trigger stops when it is full).
@@ -322,6 +324,8 @@ impl App {
             show_decoders: false,
             show_table: false,
             show_trigger: false,
+            show_measure: false,
+            measure: Default::default(),
             zero_at_trigger: true,
             memory_mib: default_memory_mib(),
             post_target: None,
@@ -453,7 +457,7 @@ impl App {
                     bf_decode::trigger::ProtocolTrigger::I2c(c, _) => Config::I2c(c.clone()),
                 };
                 cfg.check_file_values(channels as u8).map_err(|e| format!("trigger: {e}"))?;
-                TriggerKind::Event(p.build().map_err(|e| format!("trigger: {e}"))?)
+                TriggerKind::Event(p.build(self.trigger.protocol.trigger_at).map_err(|e| format!("trigger: {e}"))?)
             }
             None => TriggerKind::Pattern(Trigger::new(&self.trigger.conds[..channels.min(32)])),
         };
@@ -582,6 +586,9 @@ impl App {
                 }
                 ui.separator();
                 if ui.checkbox(&mut self.show_table, "Annotation table").clicked() {
+                    ui.close_menu();
+                }
+                if ui.checkbox(&mut self.show_measure, "Measurements").clicked() {
                     ui.close_menu();
                 }
             });
@@ -1684,6 +1691,7 @@ impl App {
                     ("Right-click a row", "trace color"),
                     ("F5 / F8", "run / stop"),
                     ("Ctrl+O / Ctrl+S", "open / save a capture"),
+                    ("View > Measurements", "frequency, duty and pulse widths per channel"),
                     ("Home", "fit"),
                     ("Ctrl+Up / Down", "taller / shorter rows"),
                     ("Click a decoded item", "select it, mark its span, show it in the table"),
@@ -1698,6 +1706,7 @@ impl App {
     }
 
     fn handle_demo_and_screenshot(&mut self, ctx: &egui::Context) {
+        self.show_measure |= self.opts.measure_window;
         if let (Some(p), false) = (self.opts.open.clone(), self.open_done) {
             self.open_done = true;
             self.file_chosen(files::Purpose::OpenCapture, p.into());
@@ -1766,6 +1775,7 @@ impl App {
                 self.memory_mib = m;
             }
             self.show_trigger |= self.opts.trigger_window;
+            self.show_measure |= self.opts.measure_window;
             if let Some(n) = self.opts.samples {
                 self.continuous = false;
                 self.samples = n;
@@ -1951,6 +1961,13 @@ impl eframe::App for App {
         self.setup_window(ctx);
         self.decoders_window(ctx);
         self.trigger_window(ctx);
+        if self.show_measure {
+            let store = self.store.clone();
+            let guard = store.read();
+            let origin = self.origin_of(&guard);
+            let running = self.running();
+            crate::measure_ui::window(ctx, &mut self.show_measure, &mut self.measure, &guard, &self.layout, &self.view, self.plot_width, &self.markers, origin, running);
+        }
         self.keys_window(ctx);
         if self.opts.color_demo {
             egui::Window::new("Color picker").show(ctx, |ui| {

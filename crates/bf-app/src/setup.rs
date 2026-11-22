@@ -6,7 +6,7 @@ use crate::rows::Layout;
 use bf_core::Cond;
 use bf_decode::i2c::I2cConfig;
 use bf_decode::spi::SpiConfig;
-use bf_decode::trigger::{I2cMatch, ProtocolTrigger, SpiLane, SpiMatch, UartMatch};
+use bf_decode::trigger::{I2cMatch, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch};
 use bf_decode::uart::UartConfig;
 use bf_decode::Format;
 use serde::{Deserialize, Serialize};
@@ -105,6 +105,8 @@ pub struct ProtocolSetup {
     /// Address or data byte (hex).
     pub i2c_value: String,
     pub i2c_dir: Direction,
+    /// Which sample of the match is the trigger sample.
+    pub trigger_at: TriggerAt,
 }
 
 impl Default for ProtocolSetup {
@@ -122,6 +124,7 @@ impl Default for ProtocolSetup {
             i2c_what: I2cWhat::Address,
             i2c_value: "50".into(),
             i2c_dir: Direction::Any,
+            trigger_at: TriggerAt::End,
         }
     }
 }

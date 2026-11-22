@@ -46,6 +46,16 @@ pub enum I2cMatch {
     Data(u8),
 }
 
+/// Which sample of the matched item is the trigger sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TriggerAt {
+    /// The first sample of the match (for a byte sequence: of its first byte).
+    Start,
+    /// The end of the match (the default).
+    #[default]
+    End,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProtocolTrigger {
     Uart(UartConfig, UartMatch),
@@ -66,9 +76,12 @@ enum Matcher {
 struct DecoderTrigger {
     dec: Box<dyn Decoder>,
     matcher: Matcher,
+    at: TriggerAt,
     out: Vec<Annotation>,
-    /// The last characters decoded (UART sequences).
-    recent: Vec<u8>,
+    /// The last characters decoded with the sample each started at (UART sequences).
+    recent: Vec<(u8, u64)>,
+    /// Longest item seen so far, in samples: how far back a trigger at the start of an item can reach.
+    max_len: u64,
     /// How long before its detection a trigger sample can lie: `lookback_bits` bit times at `bit_rate`.
     lookback_bits: f64,
     bit_rate: f64,
@@ -80,16 +93,23 @@ impl DecoderTrigger {
     fn scan(&mut self) -> Option<u64> {
         let mut hit = None;
         for a in self.out.drain(..) {
+            self.max_len = self.max_len.max(a.end.saturating_sub(a.start));
+            // The match begins at the first character of a sequence, at the item itself otherwise.
+            let mut begins = a.start;
             let m = match &self.matcher {
                 Matcher::UartBytes(seq) => {
                     if a.lane != 0 || a.kind != Kind::Data {
                         false
                     } else {
-                        self.recent.push(a.value as u8);
+                        self.recent.push((a.value as u8, a.start));
                         if self.recent.len() > seq.len() {
                             self.recent.remove(0);
                         }
-                        self.recent == *seq
+                        let hit = self.recent.len() == seq.len() && self.recent.iter().map(|c| c.0).eq(seq.iter().copied());
+                        if hit {
+                            begins = self.recent[0].1;
+                        }
+                        hit
                     }
                 }
                 Matcher::UartError => a.lane == 0 && a.kind == Kind::Data && a.is_error(),
@@ -105,7 +125,10 @@ impl DecoderTrigger {
                 },
             };
             if m && hit.is_none() {
-                hit = Some(a.end);
+                hit = Some(match self.at {
+                    TriggerAt::Start => begins,
+                    TriggerAt::End => a.end,
+                });
             }
         }
         hit
@@ -121,6 +144,7 @@ impl EventTrigger for DecoderTrigger {
         self.dec.reset(sample_rate);
         self.out.clear();
         self.recent.clear();
+        self.max_len = 0;
         self.lookback = (self.lookback_bits * sample_rate / self.bit_rate.max(1.0)) as u64;
     }
 
@@ -135,7 +159,11 @@ impl EventTrigger for DecoderTrigger {
     }
 
     fn lookback(&self) -> u64 {
-        self.lookback
+        match self.at {
+            TriggerAt::End => self.lookback,
+            // The trigger sample is the start of an item that is only recognised at its end.
+            TriggerAt::Start => self.lookback.max(2 * self.max_len),
+        }
     }
 }
 
@@ -176,7 +204,7 @@ impl ProtocolTrigger {
     }
 
     /// The trigger as something the capture thread can run.
-    pub fn build(&self) -> Result<Box<dyn EventTrigger>, String> {
+    pub fn build(&self, at: TriggerAt) -> Result<Box<dyn EventTrigger>, String> {
         self.check()?;
         let (dec, matcher, lookback_bits, bit_rate): (Box<dyn Decoder>, Matcher, f64, f64) = match self {
             ProtocolTrigger::Uart(c, m) => {
@@ -187,7 +215,8 @@ impl ProtocolTrigger {
                     UartMatch::Bytes(b) => Matcher::UartBytes(b.clone()),
                     UartMatch::Error => Matcher::UartError,
                 };
-                (Box::new(Uart::new(cfg.clone())), matcher, frame_bits + 2.0, cfg.baud)
+                let chars = if let UartMatch::Bytes(b) = m { b.len() as f64 } else { 1.0 };
+                (Box::new(Uart::new(cfg.clone())), matcher, chars * (frame_bits + 2.0) + 2.0, cfg.baud)
             }
             ProtocolTrigger::Spi(c, SpiMatch::Word { lane, value, care }) => {
                 let lane = match lane {
@@ -198,7 +227,7 @@ impl ProtocolTrigger {
             }
             ProtocolTrigger::I2c(c, m) => (Box::new(I2c::new(c.clone())), Matcher::I2c(*m), 0.0, 1.0),
         };
-        Ok(Box::new(DecoderTrigger { dec, matcher, out: Vec::new(), recent: Vec::new(), lookback_bits, bit_rate, lookback: 0 }))
+        Ok(Box::new(DecoderTrigger { dec, matcher, at, out: Vec::new(), recent: Vec::new(), max_len: 0, lookback_bits, bit_rate, lookback: 0 }))
     }
 }
 
@@ -208,7 +237,11 @@ mod tests {
     use crate::synth::Wave;
 
     fn run(t: &ProtocolTrigger, words: &[u32], rate: f64, chunk: usize) -> Option<u64> {
-        let mut ev = t.build().unwrap();
+        run_at(t, words, rate, chunk, TriggerAt::End)
+    }
+
+    fn run_at(t: &ProtocolTrigger, words: &[u32], rate: f64, chunk: usize, at: TriggerAt) -> Option<u64> {
+        let mut ev = t.build(at).unwrap();
         ev.reset(rate);
         let mask = ev.mask();
         ev.change(0, words[0]);
@@ -334,5 +367,28 @@ mod tests {
         let s = SpiConfig { miso: None, ..Default::default() };
         assert!(ProtocolTrigger::Spi(s, SpiMatch::Word { lane: SpiLane::Miso, value: 0, care: 0 }).check().is_err());
         assert!(ProtocolTrigger::I2c(I2cConfig { scl: 3, sda: 3 }, I2cMatch::Start).check().is_err());
+    }
+
+    #[test]
+    fn the_trigger_can_be_the_start_of_the_match() {
+        let (words, cfg, _) = uart_wave(b"hello world");
+        let seq = ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"lo w".to_vec()));
+        for chunk in [1usize, 50, 4096] {
+            let end = run_at(&seq, &words, 1e6, chunk, TriggerAt::End).unwrap();
+            let start = run_at(&seq, &words, 1e6, chunk, TriggerAt::Start).unwrap();
+            // The sequence is the characters 3..=6; the first of them starts at 100 + 120 * 3.
+            assert!((start as i64 - 460).abs() <= 10, "chunk {chunk}: start {start}");
+            assert!(end > start + 300, "start {start} end {end}");
+        }
+        // A single item: the start is where it began, a frame of 100 samples before its end.
+        let one = ProtocolTrigger::Uart(cfg, UartMatch::Bytes(b"w".to_vec()));
+        let (s, e) = (run_at(&one, &words, 1e6, 64, TriggerAt::Start).unwrap(), run_at(&one, &words, 1e6, 64, TriggerAt::End).unwrap());
+        assert!((e - s) as i64 >= 90 && (e - s) as i64 <= 110, "{s} {e}");
+        // The look-back needed to keep the start in the window grows with the sequence.
+        let long = ProtocolTrigger::Uart(UartConfig::default(), UartMatch::Bytes(vec![0x55; 8]));
+        let (mut a, mut b) = (long.build(TriggerAt::End).unwrap(), long.build(TriggerAt::Start).unwrap());
+        a.reset(1e6);
+        b.reset(1e6);
+        assert!(b.lookback() >= a.lookback() && b.lookback() > 0);
     }
 }

@@ -28,6 +28,13 @@ enum PatternArg {
 enum Cmd {
     /// List the available devices.
     Devices,
+    /// Read a sigrok session file (.sr) and print what is in it; with `--out`, convert it to a Blinkfeuer capture.
+    Import {
+        input: String,
+        /// Write the capture here (.bfc).
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Capture into memory and print statistics.
     Capture {
         /// Device: `sim` (simulator, as fast as possible), `sim-rt` (paced in real time) or `stock` (SLogic16U3, stock firmware) or `litex` (SLogic16U3, open gateware).
@@ -150,6 +157,32 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             for d in LitexDevice::available() {
                 println!("{:8} {} ({}, {})", "litex", d.name, d.backend, d.id);
+            }
+            Ok(())
+        }
+        Cmd::Import { input, out } => {
+            let f = std::fs::File::open(&input).map_err(|e| format!("{input}: {e}"))?;
+            let t0 = std::time::Instant::now();
+            let c = bf_io::read_sr(std::io::BufReader::new(f)).map_err(|e| format!("{input}: {e}"))?;
+            let s = &c.store;
+            println!(
+                "{} probes ({} channels in the store), {} MHz, {} samples ({:.3} s), {} events, read in {:.2} s",
+                c.probes,
+                s.channels(),
+                c.sample_rate / 1e6,
+                s.end(),
+                s.end() as f64 / c.sample_rate,
+                s.event_count(),
+                t0.elapsed().as_secs_f64()
+            );
+            println!("names: {}", c.names.join(", "));
+            if c.analog > 0 {
+                println!("note: {} analog channels were not imported", c.analog);
+            }
+            if let Some(out) = out {
+                let mut f = std::fs::File::create(&out).map_err(|e| format!("{out}: {e}"))?;
+                bf_io::write_capture(&mut f, s, &serde_json::Value::Null).map_err(|e| format!("{out}: {e}"))?;
+                println!("written to {out}");
             }
             Ok(())
         }

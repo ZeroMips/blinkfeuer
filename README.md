@@ -43,10 +43,15 @@ A working first version. What is verified and what is not:
 - **Annotation table** of decoded items with search; clicking in the table moves the waveform and vice versa.
 - **Triggers** (done on the host, the analyzer has none in hardware): level and edge conditions on any
   channels, or a protocol trigger (UART text or error, SPI word with a bit mask, I2C address, START/STOP,
-  NAK, data byte). Pre-trigger and post-trigger are set separately in samples or time, times can be
-  shown relative to the trigger, and a triggered capture stops instead of dropping data when memory is full.
+  NAK, data byte), with the trigger point at the start or the end of the match. Pre-trigger and
+  post-trigger are set separately in samples or time, times can be shown relative to the trigger, and a
+  triggered capture stops instead of dropping data when memory is full.
+- **Measurements** (View menu): edges, frequency, period, duty cycle and the shortest, mean and longest
+  high and low pulse of every shown channel, over the visible window, between the markers or over the whole
+  capture; copy as CSV.
 - **Files**: capture files (`.bfc`, compact and checksummed), setups, VCD export, CSV export of decoded
-  items. The setup is also kept between runs.
+  items, and import of sigrok session files (`.sr`, from PulseView or sigrok-cli; also `bfcli import`).
+  The setup is also kept between runs.
 
 ## Build and run
 
