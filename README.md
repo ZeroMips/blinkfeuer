@@ -1,5 +1,7 @@
 # Blinkfeuer
 
+[![CI](https://github.com/ZeroMips/blinkfeuer/actions/workflows/ci.yml/badge.svg)](https://github.com/ZeroMips/blinkfeuer/actions/workflows/ci.yml)
+
 A logic analyzer application for Linux, written in Rust. It looks and works like a bench instrument
 (black plot, dotted graticule, markers with `M1 to M2` readouts, a Bus/Signal tree) rather than like a
 phone app, and it is built for long captures: the capture store only keeps the samples where something
