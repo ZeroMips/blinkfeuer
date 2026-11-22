@@ -7,6 +7,12 @@ changes, so quiet signals cost almost no memory.
 
 *Blinkfeuer* is the old German word for a flashing beacon, the light that tells you something is out there.
 
+![Blinkfeuer showing a triggered capture of the simulator: UART, SPI and I2C decoded, with markers and the table of decoded items](docs/screenshot.png)
+
+The screenshot shows a capture of the built-in simulator, triggered on the UART text "sim 0" (the orange **T**), with
+the UART characters grouped into a telegram, SPI words, I2C transactions, two markers and the table of decoded items.
+Times are counted from the trigger.
+
 It is made for the [Sipeed SLogic16U3](https://wiki.sipeed.com/hardware/en/logic_analyzer/slogic16u3/slogic16u3.html)
 (16 channels, USB 3), and has a simulator so you can try everything without hardware.
 
