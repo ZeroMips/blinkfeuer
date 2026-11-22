@@ -1,0 +1,13 @@
+[package]
+name = "bf-device"
+description = "Device abstraction and backends (simulator; Sipeed stock and LiteX gateware) for blinkfeuer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bf-core = { path = "../bf-core" }
+thiserror = "2"
+parking_lot = "0.12"
+nusb = "0.2.5"

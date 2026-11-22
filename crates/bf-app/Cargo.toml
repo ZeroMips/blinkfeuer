@@ -1,0 +1,29 @@
+[package]
+name = "bf-app"
+description = "blinkfeuer GUI and headless CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "bfcli"
+path = "src/bin/bfcli.rs"
+
+[[bin]]
+name = "blinkfeuer"
+path = "src/main.rs"
+
+[dependencies]
+bf-core = { path = "../bf-core" }
+bf-device = { path = "../bf-device" }
+clap = { version = "4", features = ["derive"] }
+eframe = "0.30.0"
+egui = "0.30"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
+bf-decode = { version = "0.1.0", path = "../bf-decode" }
+bf-io = { path = "../bf-io" }
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+dirs = "7.0.0"

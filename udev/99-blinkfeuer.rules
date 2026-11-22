@@ -1,0 +1,7 @@
+# Blinkfeuer: access to the Sipeed SLogic16U3 for the logged-in user.
+# Copy to /etc/udev/rules.d/ and run: sudo udevadm control --reload && sudo udevadm trigger
+
+# Stock firmware.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="359f", ATTRS{idProduct}=="3031", TAG+="uaccess"
+# Open LiteX gateware (planned backend).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="605a", TAG+="uaccess"

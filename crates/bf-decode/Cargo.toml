@@ -1,0 +1,15 @@
+[package]
+name = "bf-decode"
+description = "Protocol decoders (UART, SPI, I2C) for blinkfeuer, working on the capture store's change events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bf-core = { path = "../bf-core" }
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+bf-device = { path = "../bf-device" }

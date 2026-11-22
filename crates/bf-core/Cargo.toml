@@ -1,0 +1,14 @@
+[package]
+name = "bf-core"
+description = "Sample formats, capture store with edge index and summary blocks, triggers for blinkfeuer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1"
