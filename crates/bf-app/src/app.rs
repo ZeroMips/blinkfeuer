@@ -20,6 +20,7 @@ use crate::Opts;
 use bf_core::{CaptureStore, ChannelCount, Cond, SharedStore, StoreConfig, Trigger};
 use bf_decode::engine::Engine;
 use bf_decode::Format;
+use bf_device::fx2lafw::{self, Fx2lafwDevice};
 use bf_device::litex::LitexDevice;
 use bf_device::session::{Phase, Session, SessionResult, TriggerKind, TriggerPlan};
 use bf_device::sim::SimDevice;
@@ -42,7 +43,11 @@ enum DeviceChoice {
     SimRealtime,
     Stock,
     Litex,
+    Fx2lafw,
 }
+
+/// Samplerates offered for the SLogic16U3 (each limited by the channel count).
+const SLOGIC_RATES: [f64; 8] = [5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 400e6, 800e6];
 
 impl DeviceChoice {
     fn label(self) -> &'static str {
@@ -51,6 +56,7 @@ impl DeviceChoice {
             DeviceChoice::SimRealtime => "Simulator (real time)",
             DeviceChoice::Stock => "SLogic16U3 (stock firmware)",
             DeviceChoice::Litex => "SLogic16U3 (LiteX gateware)",
+            DeviceChoice::Fx2lafw => "FX2 / Saleae Logic clone (fx2lafw)",
         }
     }
 
@@ -64,6 +70,9 @@ impl DeviceChoice {
             DeviceChoice::Litex => LitexDevice::open_first()
                 .map(|d| Box::new(d) as Box<dyn Device>)
                 .map_err(|e| e.to_string()),
+            DeviceChoice::Fx2lafw => Fx2lafwDevice::open_first()
+                .map(|d| Box::new(d) as Box<dyn Device>)
+                .map_err(|e| e.to_string()),
         }
     }
 
@@ -75,7 +84,39 @@ impl DeviceChoice {
             }
             DeviceChoice::Stock => &[Pattern::Inputs, Pattern::Counter, Pattern::Emulation],
             DeviceChoice::Litex => &[Pattern::Inputs, Pattern::Counter, Pattern::Generator],
+            DeviceChoice::Fx2lafw => &[Pattern::Inputs],
         }
+    }
+
+    /// Selectable channel counts.
+    fn channel_options(self) -> &'static [u8] {
+        match self {
+            DeviceChoice::Fx2lafw => &[8],
+            _ => &[4, 8, 16],
+        }
+    }
+
+    /// Selectable samplerates (ascending) and the highest one usable with `channels`.
+    fn rates(self, channels: u8) -> (&'static [f64], f64) {
+        match self {
+            DeviceChoice::Fx2lafw => (&fx2lafw::RATES, 24e6),
+            _ => (
+                &SLOGIC_RATES,
+                match channels {
+                    4 => 800e6,
+                    8 => 400e6,
+                    _ => 200e6,
+                },
+            ),
+        }
+    }
+
+    /// A real analyzer (not the simulator).
+    fn is_hardware(self) -> bool {
+        matches!(
+            self,
+            DeviceChoice::Stock | DeviceChoice::Litex | DeviceChoice::Fx2lafw
+        )
     }
 
     fn has_threshold(self) -> bool {
@@ -272,7 +313,7 @@ pub struct App {
     samples: f64,
     threshold: f64,
     /// When the attached analyzers were last looked for, and whether a stock / LiteX one is there.
-    stock_seen: (Instant, bool, bool),
+    stock_seen: (Instant, bool, bool, bool),
 
     layout: Layout,
     layout_touched: bool,
@@ -363,7 +404,12 @@ impl App {
             continuous: true,
             samples: 10e6,
             threshold: 1.7,
-            stock_seen: (Instant::now() - Duration::from_secs(10), false, false),
+            stock_seen: (
+                Instant::now() - Duration::from_secs(10),
+                false,
+                false,
+                false,
+            ),
             layout: Layout::generator(16),
             layout_touched: false,
             selected: None,
@@ -728,9 +774,11 @@ impl App {
                 Instant::now(),
                 !StockDevice::available().is_empty(),
                 !LitexDevice::available().is_empty(),
+                !Fx2lafwDevice::available().is_empty(),
             );
         }
-        let (stock_present, litex_present) = (self.stock_seen.1, self.stock_seen.2);
+        let (stock_present, litex_present, fx2_present) =
+            (self.stock_seen.1, self.stock_seen.2, self.stock_seen.3);
         let dim = |t: &str| RichText::new(t.to_string()).color(theme::TEXT_DIM);
         ui.horizontal_wrapped(|ui| {
             let run = egui::Button::new(RichText::new("Run  F5").color(if running {
@@ -758,12 +806,14 @@ impl App {
                         for d in [
                             DeviceChoice::Stock,
                             DeviceChoice::Litex,
+                            DeviceChoice::Fx2lafw,
                             DeviceChoice::SimRealtime,
                             DeviceChoice::Sim,
                         ] {
                             let present = match d {
                                 DeviceChoice::Stock => stock_present,
                                 DeviceChoice::Litex => litex_present,
+                                DeviceChoice::Fx2lafw => fx2_present,
                                 _ => true,
                             };
                             if present || self.device == d {
@@ -774,25 +824,35 @@ impl App {
                 if !self.device.patterns().contains(&self.pattern) {
                     self.pattern = self.device.patterns()[0];
                 }
+                let channel_options = self.device.channel_options();
+                if !channel_options.contains(&self.channels_n) {
+                    self.channels_n = channel_options[0];
+                }
                 ui.label(dim("Channels"));
                 egui::ComboBox::from_id_salt("channels")
                     .selected_text(self.channels_n.to_string())
                     .show_ui(ui, |ui| {
-                        for n in [4u8, 8, 16] {
+                        for &n in channel_options {
                             ui.selectable_value(&mut self.channels_n, n, n.to_string());
                         }
                     });
-                let max = match self.channels_n {
-                    4 => 800e6,
-                    8 => 400e6,
-                    _ => 200e6,
-                };
-                self.rate = self.rate.min(max);
+                let (rates, max) = self.device.rates(self.channels_n);
+                let unreachable = self.device == DeviceChoice::Fx2lafw
+                    && fx2lafw::start_command(self.rate).is_err();
+                if self.rate > max || unreachable {
+                    // The fastest offered rate not above the current one (or the slowest).
+                    self.rate = rates
+                        .iter()
+                        .copied()
+                        .filter(|&r| r <= self.rate.min(max))
+                        .next_back()
+                        .unwrap_or(rates[0]);
+                }
                 ui.label(dim("Sample rate"));
                 egui::ComboBox::from_id_salt("rate")
                     .selected_text(format_hz(self.rate))
                     .show_ui(ui, |ui| {
-                        for r in [5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 400e6, 800e6] {
+                        for &r in rates {
                             if r <= max {
                                 ui.selectable_value(&mut self.rate, r, format_hz(r));
                             }
@@ -2346,14 +2406,23 @@ impl App {
             if let Some(c) = self.opts.channels {
                 self.channels_n = c;
             }
-            if self.device != DeviceChoice::Stock {
+            if !self.device.is_hardware() {
                 if let Some(p) = self.opts.pattern_enum() {
                     self.pattern = p;
                 }
             }
-            if self.opts.device.as_deref() == Some("stock") {
-                self.device = DeviceChoice::Stock;
-                self.pattern = self.opts.pattern_enum().unwrap_or(Pattern::Counter);
+            match self.opts.device.as_deref() {
+                Some("stock") => {
+                    self.device = DeviceChoice::Stock;
+                    self.pattern = self.opts.pattern_enum().unwrap_or(Pattern::Counter);
+                }
+                Some("fx2lafw") => {
+                    self.device = DeviceChoice::Fx2lafw;
+                    self.pattern = Pattern::Inputs;
+                    self.channels_n = 8;
+                    self.rate = self.opts.rate.unwrap_or(1e6).min(24e6);
+                }
+                _ => {}
             }
             if let Some(spec) = self.opts.trigger.clone() {
                 self.trigger.enabled = true;
@@ -2393,7 +2462,7 @@ impl App {
             if let Some(n) = self.opts.samples {
                 self.continuous = false;
                 self.samples = n;
-                if self.device != DeviceChoice::Stock {
+                if !self.device.is_hardware() {
                     self.device = DeviceChoice::Sim;
                 }
             }

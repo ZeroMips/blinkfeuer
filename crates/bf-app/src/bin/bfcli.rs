@@ -1,6 +1,7 @@
 //! Headless capture tool: runs a capture into the store and prints statistics.
 
 use bf_core::{CaptureStore, ChannelCount, StoreConfig};
+use bf_device::fx2lafw::Fx2lafwDevice;
 use bf_device::litex::LitexDevice;
 use bf_device::session::Session;
 use bf_device::sim::SimDevice;
@@ -37,7 +38,7 @@ enum Cmd {
     },
     /// Capture into memory and print statistics.
     Capture {
-        /// Device: `sim` (simulator, as fast as possible), `sim-rt` (paced in real time) or `stock` (SLogic16U3, stock firmware) or `litex` (SLogic16U3, open gateware).
+        /// Device: `sim` (simulator, as fast as possible), `sim-rt` (paced in real time) or `stock` (SLogic16U3, stock firmware) or `litex` (SLogic16U3, open gateware) or `fx2lafw` (FX2 analyzers such as Saleae Logic clones: 8 channels, up to 24M, inputs pattern).
         #[arg(long, default_value = "sim")]
         device: String,
         /// Channels (4, 8 or 16).
@@ -151,8 +152,11 @@ fn open_device(name: &str) -> Result<Box<dyn Device>, String> {
         "litex" => LitexDevice::open_first()
             .map(|d| Box::new(d) as Box<dyn Device>)
             .map_err(|e| e.to_string()),
+        "fx2lafw" => Fx2lafwDevice::open_first()
+            .map(|d| Box::new(d) as Box<dyn Device>)
+            .map_err(|e| e.to_string()),
         other => Err(format!(
-            "unknown device '{other}' (available: sim, sim-rt, stock, litex)"
+            "unknown device '{other}' (available: sim, sim-rt, stock, litex, fx2lafw)"
         )),
     }
 }
@@ -177,6 +181,9 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             for d in LitexDevice::available() {
                 println!("{:8} {} ({}, {})", "litex", d.name, d.backend, d.id);
+            }
+            for d in Fx2lafwDevice::available() {
+                println!("{:8} {} ({}, {})", "fx2lafw", d.name, d.backend, d.id);
             }
             Ok(())
         }

@@ -3,6 +3,7 @@
 //! store. Backends handle everything device specific (control protocol, first-sample quirks, transfer
 //! rings, stall recovery).
 
+pub mod fx2lafw;
 pub mod litex;
 pub mod session;
 pub mod sim;

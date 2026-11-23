@@ -1,7 +1,11 @@
-# Blinkfeuer: access to the Sipeed SLogic16U3 for the logged-in user.
+# Blinkfeuer: access to the supported analyzers for the logged-in user.
 # Copy to /etc/udev/rules.d/ and run: sudo udevadm control --reload && sudo udevadm trigger
 
 # Stock firmware.
 SUBSYSTEM=="usb", ATTRS{idVendor}=="359f", ATTRS{idProduct}=="3031", TAG+="uaccess"
 # Open LiteX gateware (planned backend).
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="605a", TAG+="uaccess"
+# FX2 analyzers running sigrok's fx2lafw: Saleae Logic clones (before and after the firmware is loaded)
+# and generic FX2 boards.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0925", ATTRS{idProduct}=="3881", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="608c", TAG+="uaccess"

@@ -16,7 +16,8 @@ the UART characters grouped into a telegram, SPI words, I2C transactions, two ma
 Times are counted from the trigger.
 
 It is made for the [Sipeed SLogic16U3](https://wiki.sipeed.com/hardware/en/logic_analyzer/slogic16u3/slogic16u3.html)
-(16 channels, USB 3), and has a simulator so you can try everything without hardware.
+(16 channels, USB 3), and has a simulator so you can try everything without hardware. Cheap 8 channel FX2
+analyzers (the "Saleae Logic" clones) work too, with sigrok's open fx2lafw firmware.
 
 ## Status
 
@@ -28,6 +29,11 @@ A working first version. What is verified and what is not:
 - **LiteX gateware backend** (the open gateware for the same hardware, `bfcli --device litex`, selectable in the
   application when the analyzer runs it): written from the gateware's own library and tested against a fake
   register file, but **not yet run on the real device**. Everything except the USB calls is covered by tests.
+- **FX2 analyzers with fx2lafw** (`bfcli --device fx2lafw`, selectable in the application when one is attached):
+  8 channels, 20 kHz to 24 MHz, no threshold and no test patterns. blinkfeuer loads the firmware itself
+  from sigrok's firmware directory, so install it first (Debian/Ubuntu: `sigrok-firmware-fx2lafw`; or set
+  `BLINKFEUER_FIRMWARE_DIR`). The firmware cannot report lost data: when the host falls behind, the
+  capture silently has a gap.
 - Linux only.
 
 ## Features
@@ -72,6 +78,11 @@ sudo cp udev/99-blinkfeuer.rules /etc/udev/rules.d/
 sudo udevadm control --reload && sudo udevadm trigger
 ```
 
+An FX2 analyzer reconnects when blinkfeuer has loaded its firmware: a Saleae Logic clone keeps its ID
+`0925:3881`, generic FX2 boards come back as `1d50:608c` (the rule covers both). Under WSL keep
+`usbipd attach --wsl --busid <BUSID> --auto-attach` running, so the analyzer is attached again after the
+reconnect.
+
 The stock firmware only enumerates over a SuperSpeed (USB 3) link, so use a USB 3 port and cable. If the
 analyzer does not show up on a port that worked before, rebinding the host controller has fixed it.
 
@@ -80,7 +91,7 @@ analyzer does not show up on a port that worked before, rebinding the host contr
 | Crate | What it holds |
 |---|---|
 | `bf-core` | Sample formats, the capture store (sparse change events plus per-block summaries), trigger conditions |
-| `bf-device` | The device interface, the simulator, the stock-firmware and LiteX-gateware backends, the capture session with the trigger logic |
+| `bf-device` | The device interface, the simulator, the stock-firmware, LiteX-gateware and fx2lafw backends, the capture session with the trigger logic |
 | `bf-decode` | UART, SPI and I2C decoders, the decoding engine, protocol triggers |
 | `bf-io` | Capture file format and VCD export |
 | `bf-app` | The application (`blinkfeuer`) and the command line tool (`bfcli`) |
@@ -89,6 +100,9 @@ The protocol of the stock firmware is implemented from Sipeed's written descript
 [SLogic repository](https://github.com/sipeed/SLogic); no code was taken from their GPL-licensed driver.
 The LiteX backend follows the register map and transport of the gateware's own BSD-2-Clause library
 (libslogic16u3, Enjoy-Digital).
+The fx2lafw backend talks the command set of sigrok's fx2lafw firmware (three vendor requests and a bulk
+endpoint) and the FX2's built-in firmware loader; no libsigrok code is used. The GPL-licensed firmware is
+not distributed with blinkfeuer, it is loaded from the system at runtime.
 
 ## Licence
 

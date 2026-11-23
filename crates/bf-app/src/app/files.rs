@@ -86,6 +86,7 @@ impl DeviceChoice {
             DeviceChoice::SimRealtime => "sim-realtime",
             DeviceChoice::Stock => "stock",
             DeviceChoice::Litex => "litex",
+            DeviceChoice::Fx2lafw => "fx2lafw",
         }
     }
 
@@ -95,6 +96,7 @@ impl DeviceChoice {
             DeviceChoice::SimRealtime,
             DeviceChoice::Stock,
             DeviceChoice::Litex,
+            DeviceChoice::Fx2lafw,
         ]
         .into_iter()
         .find(|d| d.key() == k)
