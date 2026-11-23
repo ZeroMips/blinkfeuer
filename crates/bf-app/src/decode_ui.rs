@@ -98,7 +98,7 @@ mod help {
     pub const UART_TELEGRAMS: &str = "Characters that follow each other closely are joined into one telegram: a bar on the 'Telegram' row showing the whole text, and one line in the annotation table (searchable by text).";
     pub const UART_GAP: &str = "A telegram ends when the line has been idle this long, in bit times or in characters (a character is start, data, parity and stop bits: 10 bit times for 8N1, 11 for 8E1). Changing the unit converts the value. The default of 24 bit times is about 2.4 characters; use a larger gap for slow senders. Click the number to type it, or drag it.";
     pub const UART_PROTOCOL: &str = "What the characters carry. None: plain characters, optionally joined into telegrams. Modbus RTU: frames are found by the pause between them (3.5 characters, 1.75 ms above 19200 baud) and checked by their CRC; each frame is shown on the 'Frame' row and split into address, function, registers, values and CRC on the 'Fields' row. Modbus RTU usually runs 8E1 (even parity) or 8N2.";
-    pub const UART_LF: &str = "Also end a telegram right after a line feed (0x0A), as in line-based text protocols such as NMEA or console output.";
+    pub const UART_LF: &str = "Only offered while the values are shown as ASCII. Also end a telegram right after a line feed (0x0A), as in line-based text protocols such as NMEA or console output.";
     pub const UART_INVERT: &str = "Use when the line idles low and a start bit is a high level (inverted logic, e.g. RS-232 seen without a level shifter).";
 
     pub const SPI_SCK: &str =
@@ -295,19 +295,32 @@ pub struct BaudProbe {
     pub format_result: Option<(UartConfig, Result<bf_decode::framing::FormatGuess, String>)>,
 }
 
+/// Ending UART telegrams at a line feed is for text only: with values not shown as ASCII the option is
+/// switched off. True when that changed the settings.
+pub fn lf_only_for_ascii(cfg: &mut Config, fmt: Format) -> bool {
+    match cfg {
+        Config::Uart(c) if fmt != Format::Ascii && c.telegram_lf => {
+            c.telegram_lf = false;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// The settings a frame format answer depends on.
 fn same_line(a: &UartConfig, b: &UartConfig) -> bool {
     a.rx == b.rx && a.baud == b.baud && a.invert == b.invert && a.lsb_first == b.lsb_first
 }
 
-/// Edit a decoder's settings; true when anything changed. `telegrams: false` leaves out what only matters
-/// for display (a trigger does not need it); a `probe` adds baud rate detection to UART settings.
+/// Edit a decoder's settings; true when anything changed. `display` is the format values are shown in;
+/// `None` leaves out what only matters for display (a trigger does not need it). A `probe` adds baud
+/// rate and frame format detection to UART settings.
 pub fn config_ui_with(
     ui: &mut egui::Ui,
     id: &str,
     cfg: &mut Config,
     names: &[String],
-    telegrams: bool,
+    display: Option<Format>,
     mut probe: Option<&mut BaudProbe>,
 ) -> bool {
     let mut changed = false;
@@ -470,7 +483,7 @@ pub fn config_ui_with(
                     });
                 });
             });
-            if telegrams {
+            if display.is_some() {
                 section(ui, "Protocol", |ui| {
                     grid(ui, &format!("{id}g4"), |ui| {
                         changed |= param(ui, "Protocol", help::UART_PROTOCOL, |ui| {
@@ -494,7 +507,7 @@ pub fn config_ui_with(
                     });
                 });
             }
-            if telegrams && c.protocol == Protocol::Plain {
+            if display.is_some() && c.protocol == Protocol::Plain {
                 section(ui, "Telegrams", |ui| {
                     grid(ui, &format!("{id}g3"), |ui| {
                         changed |= param(ui, "Join characters", help::UART_TELEGRAMS, |ui| {
@@ -507,9 +520,12 @@ pub fn config_ui_with(
                             changed |= param(ui, "Idle gap", help::UART_GAP, |ui| {
                                 gap_editor(ui, &format!("{id}gapunit"), c)
                             });
-                            changed |= param(ui, "Line feed", help::UART_LF, |ui| {
-                                ui.checkbox(&mut c.telegram_lf, "End a telegram after LF (\\n)")
-                            });
+                            // Line feeds only mean something in text.
+                            if display == Some(Format::Ascii) {
+                                changed |= param(ui, "Line feed", help::UART_LF, |ui| {
+                                    ui.checkbox(&mut c.telegram_lf, "End a telegram after LF (\\n)")
+                                });
+                            }
                         }
                     });
                 });
@@ -708,8 +724,11 @@ pub fn setup_ui(
                         });
                     });
                 });
+                if lf_only_for_ascii(&mut e.cfg, e.format) {
+                    actions.push(Action::Rebuild(i));
+                }
                 let mut cfg = e.cfg.clone();
-                if config_ui_with(ui, &format!("d{}", e.handle.id.0), &mut cfg, names, true, Some(&mut st.probe)) {
+                if config_ui_with(ui, &format!("d{}", e.handle.id.0), &mut cfg, names, Some(e.format), Some(&mut st.probe)) {
                     e.cfg = cfg;
                     actions.push(Action::Rebuild(i));
                 }
@@ -1440,6 +1459,29 @@ mod tests {
         let old: UartConfig = serde_json::from_str(r#"{"telegram_gap": 38.0}"#).unwrap();
         assert_eq!(old.telegram_gap_unit, GapUnit::Bits);
         assert_eq!(old.telegram_gap_bits(), 38.0);
+    }
+
+    #[test]
+    fn line_feeds_end_telegrams_only_for_ascii() {
+        assert!(!UartConfig::default().telegram_lf);
+        let lf = || {
+            Config::Uart(UartConfig {
+                telegram_lf: true,
+                ..Default::default()
+            })
+        };
+        let mut c = lf();
+        assert!(!lf_only_for_ascii(&mut c, Format::Ascii));
+        assert!(c == lf(), "ASCII keeps the option");
+        for fmt in [Format::Hex, Format::Dec, Format::Bin] {
+            let mut c = lf();
+            assert!(lf_only_for_ascii(&mut c, fmt));
+            assert!(matches!(&c, Config::Uart(u) if !u.telegram_lf));
+            assert!(
+                !lf_only_for_ascii(&mut c, fmt),
+                "only reports a change once"
+            );
+        }
     }
 
     #[test]

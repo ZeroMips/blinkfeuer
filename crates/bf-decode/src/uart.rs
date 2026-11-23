@@ -101,7 +101,8 @@ pub struct UartConfig {
     /// A telegram ends when the line has been idle this long (in `telegram_gap_unit`).
     pub telegram_gap: f64,
     pub telegram_gap_unit: GapUnit,
-    /// ... or right after a line feed (0x0A).
+    /// ... or right after a line feed (0x0A); meant for text (the application offers it only while
+    /// the values are shown as ASCII).
     pub telegram_lf: bool,
     /// The protocol on top of the characters (telegram settings apply to `Plain` only).
     pub protocol: Protocol,
@@ -137,7 +138,7 @@ impl Default for UartConfig {
             telegrams: true,
             telegram_gap: 24.0,
             telegram_gap_unit: GapUnit::Bits,
-            telegram_lf: true,
+            telegram_lf: false,
             protocol: Protocol::Plain,
         }
     }
@@ -525,7 +526,10 @@ mod tests {
 
     #[test]
     fn a_line_feed_ends_a_telegram_even_without_a_gap() {
-        let cfg = UartConfig::default();
+        let cfg = UartConfig {
+            telegram_lf: true,
+            ..Default::default()
+        };
         let mut w = Wave::new(RATE, 60_000, 1);
         w.uart(0, 100, &cfg, b"AB\nCD\r\n");
         let a = decode_lanes(cfg.clone(), &w);

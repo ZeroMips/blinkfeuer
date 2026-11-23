@@ -287,7 +287,8 @@ impl App {
             }
         }
         let mut map = std::collections::HashMap::new();
-        for d in s.decoders {
+        for mut d in s.decoders {
+            crate::decode_ui::lf_only_for_ascii(&mut d.config, d.format);
             if let Err(e) = d.config.check_file_values(n) {
                 problems.push(format!("decoder '{}' skipped: {e}", d.name));
                 continue;
