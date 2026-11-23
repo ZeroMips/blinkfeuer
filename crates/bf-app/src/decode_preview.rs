@@ -1,5 +1,9 @@
 //! Example traces for the decoder setup: a synthetic waveform generated for the *current settings* and
 //! decoded by the real decoder, so the picture shows what the decoder expects and what it makes of it.
+//!
+//! The trigger setup gets the same kind of example for a protocol trigger: a waveform that contains
+//! what the trigger looks for, decoded by the real decoder, with the trigger sample found by running
+//! the real trigger over it.
 
 use crate::decode_ui::Config;
 use crate::theme;
@@ -10,7 +14,8 @@ use bf_decode::engine::decode_all;
 use bf_decode::i2c::I2c;
 use bf_decode::spi::Spi;
 use bf_decode::synth::Wave;
-use bf_decode::uart::Uart;
+use bf_decode::trigger::{I2cMatch, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch};
+use bf_decode::uart::{Uart, UartConfig};
 use bf_decode::{Annotation, Decoder, Format};
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke};
 
@@ -31,6 +36,8 @@ pub struct Preview {
     /// Decoded lanes: (name, annotations).
     pub lanes: Vec<(String, Vec<Annotation>)>,
     pub caption: Vec<String>,
+    /// Where a trigger fires (trigger examples only).
+    pub trigger: Option<f64>,
 }
 
 fn chan(names: &[String], ch: u8) -> String {
@@ -140,6 +147,7 @@ fn uart(cfg: &bf_decode::uart::UartConfig, names: &[String]) -> Preview {
         bit_labels,
         lanes: vec![("decoded".into(), lanes[0].clone())],
         caption,
+        trigger: None,
     }
 }
 
@@ -232,6 +240,7 @@ fn spi(cfg: &bf_decode::spi::SpiConfig, names: &[String]) -> Preview {
         bit_labels,
         lanes,
         caption,
+        trigger: None,
     }
 }
 
@@ -296,7 +305,322 @@ fn i2c(cfg: &bf_decode::i2c::I2cConfig, names: &[String]) -> Preview {
             "Both lines idle high. START: SDA falls while SCL is high. STOP: SDA rises while SCL is high.".into(),
             "Each bit is valid while SCL is high (dots on SDA); SDA changes only while SCL is low. The 9th clock is ACK: the receiver pulls SDA low.".into(),
         ],
+        trigger: None,
     }
+}
+
+/// The example for a protocol trigger: what it looks for, after something it does not, with the
+/// trigger sample marked. `None` when the trigger settings are not usable.
+pub fn build_trigger(t: &ProtocolTrigger, at: TriggerAt, names: &[String]) -> Option<Preview> {
+    t.check().ok()?;
+    let mut p = match t {
+        ProtocolTrigger::Uart(cfg, m) => uart_trigger(cfg, m, at, names),
+        ProtocolTrigger::Spi(cfg, SpiMatch::Word { lane, value, care }) => {
+            spi_trigger(cfg, *lane, *value, *care, names)
+        }
+        ProtocolTrigger::I2c(cfg, m) => i2c_trigger(cfg, m, names),
+    };
+    p.0.trigger = trigger_sample(t, at, &p.1);
+    if p.0.trigger.is_none() {
+        p.0.caption
+            .push("The trigger does not fire on this example.".into());
+    }
+    Some(p.0)
+}
+
+/// Run the real trigger over `w`: the sample it reports.
+fn trigger_sample(t: &ProtocolTrigger, at: TriggerAt, w: &Wave) -> Option<f64> {
+    let mut trg = t.build(at).ok()?;
+    trg.reset(w.rate);
+    let mask = trg.mask();
+    let first = *w.samples.first()?;
+    if let Some(s) = trg.change(0, first) {
+        return Some(s as f64);
+    }
+    for i in 1..w.samples.len() {
+        if (w.samples[i] ^ w.samples[i - 1]) & mask != 0 {
+            if let Some(s) = trg.change(i as u64, w.samples[i]) {
+                return Some(s as f64);
+            }
+        }
+    }
+    trg.advance(w.samples.len() as u64).map(|s| s as f64)
+}
+
+fn at_text(at: TriggerAt) -> &'static str {
+    match at {
+        TriggerAt::Start => "start",
+        TriggerAt::End => "end",
+    }
+}
+
+/// A character as a label: the character itself if printable, else its hex value.
+fn char_label(b: u8) -> String {
+    if (0x21..0x7f).contains(&b) {
+        format!("'{}'", b as char)
+    } else {
+        format!("{b:02X}")
+    }
+}
+
+fn uart_trigger(
+    cfg: &UartConfig,
+    m: &UartMatch,
+    at: TriggerAt,
+    names: &[String],
+) -> (Preview, Wave) {
+    const BIT: usize = 16;
+    let cfg = UartConfig {
+        telegrams: false,
+        protocol: Default::default(),
+        ..cfg.clone()
+    };
+    let mask = ((1u32 << cfg.data_bits.min(8)) - 1) as u8;
+    // A character the trigger does not look for, then what it looks for.
+    let (chars, broken): (Vec<u8>, bool) = match m {
+        UartMatch::Bytes(seq) => {
+            let other = [0x2E, 0x20, 0x55]
+                .into_iter()
+                .map(|b: u8| b & mask)
+                .find(|b| Some(b) != seq.first())
+                .unwrap_or(0);
+            (
+                std::iter::once(other).chain(seq.iter().copied()).collect(),
+                false,
+            )
+        }
+        UartMatch::Error => (vec![0x4B & mask, 0x4B & mask], true),
+    };
+    let frame = cfg.char_bits() * BIT as f64;
+    let idle = 2 * BIT;
+    let len = idle + (chars.len() as f64 * frame).ceil() as usize + 3 * idle;
+    let mut w = Wave::new(
+        cfg.baud * BIT as f64,
+        len,
+        if cfg.invert { 0 } else { 1 << cfg.rx },
+    );
+    let mut labels = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        let s0 = idle as f64 + i as f64 * frame;
+        w.uart(cfg.rx, s0.round() as u64, &cfg, &[c]);
+        labels.push((s0, s0 + frame, char_label(c)));
+    }
+    if broken {
+        // The second character's stop bit is held at the start bit level: a framing error.
+        let stop = idle as f64 + frame + (cfg.char_bits() - cfg.stop_bits as f64) * BIT as f64;
+        w.set(
+            cfg.rx,
+            stop.round() as u64,
+            (stop + BIT as f64).round() as u64,
+            cfg.invert,
+        );
+    }
+    let lanes = decode(&w, Box::new(Uart::new(cfg.clone())));
+    let what = match m {
+        UartMatch::Bytes(seq) => format!(
+            "the {} character{} {}",
+            seq.len(),
+            if seq.len() == 1 { "" } else { "s" },
+            seq.iter()
+                .map(|&b| char_label(b))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        UartMatch::Error => "a framing error (here: a stop bit that is low)".into(),
+    };
+    let caption = vec![
+        format!("The trigger looks for {what}; the character before it does not match."),
+        format!(
+            "T marks the trigger sample: the {} of the match.",
+            at_text(at)
+        ),
+    ];
+    let p = Preview {
+        len,
+        rows: vec![SigRow {
+            label: format!("RX  {}", chan(names, cfg.rx)),
+            levels: levels_of(&w, cfg.rx),
+        }],
+        marks: Vec::new(),
+        bit_labels: labels,
+        lanes: vec![("decoded".into(), lanes[0].clone())],
+        caption,
+        trigger: None,
+    };
+    (p, w)
+}
+
+fn spi_trigger(
+    cfg: &bf_decode::spi::SpiConfig,
+    lane: SpiLane,
+    value: u32,
+    care: u32,
+    names: &[String],
+) -> (Preview, Wave) {
+    const HALF: u64 = 8;
+    let bits = cfg.bits as u64;
+    let full = if bits >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << bits) - 1
+    };
+    let (value, care) = (value & full, care & full);
+    // A word that differs in a bit that has to match, then the word looked for (bits that do not
+    // matter are filled with a pattern, to show that they are ignored).
+    let wanted = value & care | 0xA5A5_A5A5 & !care & full;
+    let mut words = Vec::new();
+    if care != 0 {
+        let top = 31 - care.leading_zeros();
+        words.push(wanted ^ (1 << top));
+    }
+    words.push(wanted);
+    let other: Vec<u32> = words.iter().map(|_| 0x3A5C_69D1 & full).collect();
+    let (mosi, miso) = match lane {
+        SpiLane::Mosi => (words.clone(), other),
+        SpiLane::Miso => (other, words.clone()),
+    };
+    let lead = 2 * HALF;
+    let len = (lead + 2 * HALF * bits * words.len() as u64 + 10 * HALF + lead) as usize;
+    let init = (cfg.cpol as u32) << cfg.sck | cfg.cs.map_or(0, |c| (cfg.cs_active_low as u32) << c);
+    let mut w = Wave::new(1e6, len, init);
+    w.spi(
+        cfg,
+        lead,
+        HALF,
+        if cfg.mosi.is_some() { &mosi } else { &[] },
+        if cfg.miso.is_some() { &miso } else { &[] },
+    );
+    let mut rows = Vec::new();
+    let mut add = |label: &str, ch: u8| {
+        rows.push(SigRow {
+            label: format!("{label:<4} {}", chan(names, ch)),
+            levels: levels_of(&w, ch),
+        })
+    };
+    if let Some(c) = cfg.cs {
+        add(if cfg.cs_active_low { "CS#" } else { "CS" }, c);
+    }
+    add("SCK", cfg.sck);
+    if let Some(c) = cfg.mosi {
+        add("MOSI", c);
+    }
+    if let Some(c) = cfg.miso {
+        add("MISO", c);
+    }
+    let digits = (bits as usize).div_ceil(4);
+    let labels = words
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let s0 = (lead + HALF + i as u64 * bits * 2 * HALF) as f64;
+            (s0, s0 + (bits * 2 * HALF) as f64, format!("{v:0digits$X}"))
+        })
+        .collect();
+    let decoded = decode(&w, Box::new(Spi::new(cfg.clone())));
+    let mut lanes = Vec::new();
+    if cfg.mosi.is_some() {
+        lanes.push(("MOSI word".to_string(), decoded[0].clone()));
+    }
+    if cfg.miso.is_some() {
+        lanes.push(("MISO word".to_string(), decoded[1].clone()));
+    }
+    let line = match lane {
+        SpiLane::Mosi => "MOSI",
+        SpiLane::Miso => "MISO",
+    };
+    let caption = vec![
+        format!(
+            "The trigger looks for {value:0digits$X} on {line}, comparing the bits set in {care:0digits$X}; \
+             the word before it differs in one of them."
+        ),
+        "T marks the trigger sample.".into(),
+    ];
+    let p = Preview {
+        len,
+        rows,
+        marks: Vec::new(),
+        bit_labels: labels,
+        lanes,
+        caption,
+        trigger: None,
+    };
+    (p, w)
+}
+
+fn i2c_trigger(cfg: &bf_decode::i2c::I2cConfig, m: &I2cMatch, names: &[String]) -> (Preview, Wave) {
+    const Q: u64 = 8;
+    let lead = 3 * Q;
+    let (scl, sda) = (cfg.scl, cfg.sda);
+    let (addr, read, data, nak) = match *m {
+        I2cMatch::Address { addr, read } => (addr, read.unwrap_or(false), 0x3C, false),
+        I2cMatch::Data(v) => (0x50, false, v, false),
+        I2cMatch::Nak => (0x50, false, 0x3C, true),
+        I2cMatch::Start | I2cMatch::Stop => (0x50, false, 0x3C, false),
+    };
+    let mut w = Wave::new(
+        1e6,
+        (lead + Q + 2 * 36 * Q + 3 * Q + lead) as usize,
+        (1 << scl) | (1 << sda),
+    );
+    let mut t = w.i2c_start(scl, sda, lead, Q, false);
+    let mut labels = vec![(lead as f64, t as f64, "S".to_string())];
+    let a0 = t;
+    t = w.i2c_byte(scl, sda, t, Q, addr << 1 | read as u8, false);
+    labels.push((
+        a0 as f64,
+        t as f64,
+        format!("{addr:02X} {}", if read { "R" } else { "W" }),
+    ));
+    let d0 = t;
+    t = w.i2c_byte(scl, sda, t, Q, data, nak);
+    labels.push((
+        d0 as f64,
+        t as f64,
+        format!("{data:02X}{}", if nak { " NAK" } else { "" }),
+    ));
+    let p0 = t;
+    t = w.i2c_stop(scl, sda, t, Q);
+    labels.push((p0 as f64, t as f64, "P".into()));
+    let len = (t + lead) as usize;
+    w.samples.truncate(len);
+    let rows = vec![
+        SigRow {
+            label: format!("SCL {}", chan(names, scl)),
+            levels: levels_of(&w, scl),
+        },
+        SigRow {
+            label: format!("SDA {}", chan(names, sda)),
+            levels: levels_of(&w, sda),
+        },
+    ];
+    let decoded = decode(&w, Box::new(I2c::new(cfg.clone())));
+    let what = match *m {
+        I2cMatch::Start => "a START condition".to_string(),
+        I2cMatch::Stop => "a STOP condition".to_string(),
+        I2cMatch::Address { addr, read } => format!(
+            "address {addr:02X}{}",
+            match read {
+                Some(true) => " (read)",
+                Some(false) => " (write)",
+                None => "",
+            }
+        ),
+        I2cMatch::Nak => "a byte that is not acknowledged".to_string(),
+        I2cMatch::Data(v) => format!("the data byte {v:02X}"),
+    };
+    let p = Preview {
+        len,
+        rows,
+        marks: Vec::new(),
+        bit_labels: labels,
+        lanes: vec![("decoded".into(), decoded[0].clone())],
+        caption: vec![
+            format!("The trigger looks for {what}."),
+            "T marks the trigger sample.".into(),
+        ],
+        trigger: None,
+    };
+    (p, w)
 }
 
 /// Draw `p` into the available width.
@@ -345,6 +669,24 @@ pub fn draw(ui: &mut egui::Ui, p: &Preview, fmt: Format) {
                 pos2(x, rect.bottom() - 4.0),
             ],
             Stroke::new(1.0_f32, theme::GRID),
+        );
+    }
+
+    if let Some(t) = p.trigger {
+        // The same marker as in the waveform: an orange line with a "T" tab.
+        let x = x_of(t);
+        painter.line_segment(
+            [pos2(x, rect.top() + 2.0), pos2(x, rect.bottom() - 2.0)],
+            Stroke::new(1.5_f32, theme::DEC_WARN),
+        );
+        let tab = Rect::from_min_size(pos2(x - 7.0, rect.top() + 2.0), vec2(14.0, 13.0));
+        painter.rect_filled(tab, 0.0, theme::DEC_WARN);
+        painter.text(
+            tab.center(),
+            Align2::CENTER_CENTER,
+            "T",
+            FontId::monospace(10.0),
+            Color32::BLACK,
         );
     }
 
@@ -424,6 +766,78 @@ mod tests {
             .filter(|a| a.kind == Kind::Data)
             .map(|a| a.value)
             .collect()
+    }
+
+    fn uart_cfg() -> UartConfig {
+        UartConfig {
+            parity: Parity::Even,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn trigger_example_marks_the_start_or_end_of_the_sequence() {
+        let t = ProtocolTrigger::Uart(uart_cfg(), UartMatch::Bytes(b"OK".to_vec()));
+        for at in [TriggerAt::Start, TriggerAt::End] {
+            let p = build_trigger(&t, at, &[]).unwrap();
+            // One other character, then "OK", decoded without errors.
+            assert_eq!(words(&p, 0), vec![0x2E, b'O' as u32, b'K' as u32]);
+            let chars = &p.lanes[0].1;
+            let want = match at {
+                TriggerAt::Start => chars[1].start,
+                TriggerAt::End => chars[2].end,
+            };
+            assert_eq!(p.trigger, Some(want as f64), "{at:?}");
+        }
+    }
+
+    #[test]
+    fn trigger_example_for_uart_errors_spi_words_and_i2c() {
+        let t = ProtocolTrigger::Uart(uart_cfg(), UartMatch::Error);
+        let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
+        let chars = &p.lanes[0].1;
+        assert!(chars[0].flags & flag::FRAMING == 0 && chars[1].flags & flag::FRAMING != 0);
+        assert_eq!(p.trigger, Some(chars[1].end as f64));
+
+        let spi = SpiConfig::default();
+        let t = ProtocolTrigger::Spi(
+            spi.clone(),
+            SpiMatch::Word {
+                lane: SpiLane::Mosi,
+                value: 0xA5,
+                care: 0xF0,
+            },
+        );
+        let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
+        let w = words(&p, 0);
+        assert_eq!(w.len(), 2);
+        assert_ne!(w[0] & 0xF0, 0xA0);
+        assert_eq!(w[1] & 0xF0, 0xA0);
+        assert_eq!(p.trigger, Some(p.lanes[0].1.last().unwrap().end as f64));
+
+        let i2c = bf_decode::i2c::I2cConfig::default();
+        for m in [
+            I2cMatch::Start,
+            I2cMatch::Stop,
+            I2cMatch::Nak,
+            I2cMatch::Data(0x7E),
+            I2cMatch::Address {
+                addr: 0x23,
+                read: Some(true),
+            },
+        ] {
+            let p =
+                build_trigger(&ProtocolTrigger::I2c(i2c.clone(), m), TriggerAt::End, &[]).unwrap();
+            assert!(p.trigger.is_some(), "{m:?}");
+        }
+        // Unusable settings: no example.
+        let same = bf_decode::i2c::I2cConfig { scl: 1, sda: 1 };
+        assert!(build_trigger(
+            &ProtocolTrigger::I2c(same, I2cMatch::Start),
+            TriggerAt::End,
+            &[]
+        )
+        .is_none());
     }
 
     #[test]

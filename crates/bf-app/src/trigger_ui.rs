@@ -7,7 +7,8 @@ use crate::setup::{
 use crate::theme;
 use crate::view::format_split;
 use bf_core::Cond;
-use bf_decode::trigger::TriggerAt;
+use bf_decode::trigger::{ProtocolTrigger, TriggerAt};
+use bf_decode::Format;
 use egui::RichText;
 
 fn dim(ui: &mut egui::Ui, text: impl Into<String>) {
@@ -76,6 +77,7 @@ pub fn contents(
         TriggerMode::Spi => spi(ui, t, names),
         TriggerMode::I2c => i2c(ui, t, names),
     }
+    example(ui, t, names);
     ui.separator();
     ui.label(
         RichText::new("How much to record")
@@ -157,6 +159,28 @@ pub fn contents(
                 "The pre-trigger window may not fit in the memory limit.",
             );
         }
+    }
+}
+
+/// For a protocol trigger: an example of what it looks for, with the trigger sample marked.
+fn example(ui: &mut egui::Ui, t: &TriggerSetup, names: &[String]) {
+    let Ok(Some(trigger)) = t.protocol.build(t.mode) else {
+        return;
+    };
+    let Some(p) = crate::decode_preview::build_trigger(&trigger, t.protocol.trigger_at, names)
+    else {
+        return;
+    };
+    let fmt = match trigger {
+        ProtocolTrigger::Uart(..) if t.protocol.uart_ascii => Format::Ascii,
+        _ => Format::Hex,
+    };
+    ui.add_space(6.0);
+    ui.label(RichText::new("Example").color(theme::TEXT).strong());
+    crate::decode_preview::draw(ui, &p, fmt);
+    ui.add_space(2.0);
+    for line in &p.caption {
+        ui.label(RichText::new(line).color(theme::TEXT_DIM).size(11.0));
     }
 }
 
