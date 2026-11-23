@@ -38,7 +38,18 @@ pub struct I2c {
 
 impl I2c {
     pub fn new(cfg: I2cConfig) -> Self {
-        Self { cfg, primed: false, scl: true, sda: true, in_txn: false, bit_n: 0, byte: 0, first_byte: true, byte_start: 0, pending: None }
+        Self {
+            cfg,
+            primed: false,
+            scl: true,
+            sda: true,
+            in_txn: false,
+            bit_n: 0,
+            byte: 0,
+            first_byte: true,
+            byte_start: 0,
+            pending: None,
+        }
     }
 
     pub fn config(&self) -> &I2cConfig {
@@ -50,9 +61,25 @@ impl I2c {
         if let Some(p) = self.pending.take() {
             let nak = if p.nak { flag::NAK } else { 0 };
             out.push(if p.address {
-                Annotation { start: p.start, end, value: (p.value >> 1) as u32, lane: 0, kind: Kind::Address, bits: 7, flags: nak | if p.value & 1 != 0 { flag::READ } else { 0 } }
+                Annotation {
+                    start: p.start,
+                    end,
+                    value: (p.value >> 1) as u32,
+                    lane: 0,
+                    kind: Kind::Address,
+                    bits: 7,
+                    flags: nak | if p.value & 1 != 0 { flag::READ } else { 0 },
+                }
             } else {
-                Annotation { start: p.start, end, value: p.value as u32, lane: 0, kind: Kind::Data, bits: 8, flags: nak }
+                Annotation {
+                    start: p.start,
+                    end,
+                    value: p.value as u32,
+                    lane: 0,
+                    kind: Kind::Data,
+                    bits: 8,
+                    flags: nak,
+                }
             });
         }
     }
@@ -105,7 +132,15 @@ impl Decoder for I2c {
                     self.first_byte = true;
                     self.byte_start = t + 1;
                 } else if self.in_txn {
-                    out.push(Annotation { start: t, end: t + 1, value: 0, lane: 0, kind: Kind::Stop, bits: 0, flags: 0 });
+                    out.push(Annotation {
+                        start: t,
+                        end: t + 1,
+                        value: 0,
+                        lane: 0,
+                        kind: Kind::Stop,
+                        bits: 0,
+                        flags: 0,
+                    });
                     self.in_txn = false;
                 }
             }
@@ -116,7 +151,12 @@ impl Decoder for I2c {
                     self.byte = (self.byte << 1) | sda as u8;
                     self.bit_n += 1;
                 } else {
-                    self.pending = Some(Pending { start: self.byte_start, value: self.byte, nak: sda, address: self.first_byte });
+                    self.pending = Some(Pending {
+                        start: self.byte_start,
+                        value: self.byte,
+                        nak: sda,
+                        address: self.first_byte,
+                    });
                     self.first_byte = false;
                     self.bit_n = 0;
                     self.byte = 0;

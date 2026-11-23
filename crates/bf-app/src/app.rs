@@ -5,20 +5,29 @@ mod files;
 
 use crate::decode_ui::{self, Config, DecoderKind, Entry};
 use crate::markers::{delta_text, snap_to_edge, Markers, Which};
-use crate::rows::{bus_value, format_bus, parse_channels, Dest, Item, Layout, Mover, Radix, Row, RowKind};
+use crate::rows::{
+    bus_value, format_bus, parse_channels, Dest, Item, Layout, Mover, Radix, Row, RowKind,
+};
 use crate::theme;
-use crate::view::{format_duration, format_hz, format_scale, format_split, parse_time, scale_step, spp_for_step, View};
-use crate::waveform::{draw_annotations, draw_bus, draw_grid, draw_markers, draw_ruler, draw_signal, draw_trigger};
+use crate::view::{
+    format_duration, format_hz, format_scale, format_split, parse_time, scale_step, spp_for_step,
+    View,
+};
+use crate::waveform::{
+    draw_annotations, draw_bus, draw_grid, draw_markers, draw_ruler, draw_signal, draw_trigger,
+};
 use crate::Opts;
-use egui::{pos2, vec2, Align2, Color32, CursorIcon, FontId, Key, Margin, Rect, RichText, Sense, Stroke};
 use bf_core::{CaptureStore, ChannelCount, Cond, SharedStore, StoreConfig, Trigger};
 use bf_decode::engine::Engine;
 use bf_decode::Format;
+use bf_device::litex::LitexDevice;
 use bf_device::session::{Phase, Session, SessionResult, TriggerKind, TriggerPlan};
 use bf_device::sim::SimDevice;
-use bf_device::litex::LitexDevice;
 use bf_device::stock::StockDevice;
 use bf_device::{CaptureConfig, Device, Pattern};
+use egui::{
+    pos2, vec2, Align2, Color32, CursorIcon, FontId, Key, Margin, Rect, RichText, Sense, Stroke,
+};
 use std::time::{Duration, Instant};
 
 const NAME_W: f32 = 140.0;
@@ -49,19 +58,21 @@ impl DeviceChoice {
         match self {
             DeviceChoice::Sim => Ok(Box::new(SimDevice::new(false))),
             DeviceChoice::SimRealtime => Ok(Box::new(SimDevice::new(true))),
-            DeviceChoice::Stock => {
-                StockDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string())
-            }
-            DeviceChoice::Litex => {
-                LitexDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string())
-            }
+            DeviceChoice::Stock => StockDevice::open_first()
+                .map(|d| Box::new(d) as Box<dyn Device>)
+                .map_err(|e| e.to_string()),
+            DeviceChoice::Litex => LitexDevice::open_first()
+                .map(|d| Box::new(d) as Box<dyn Device>)
+                .map_err(|e| e.to_string()),
         }
     }
 
     /// Test patterns the backend offers; the first is the default.
     fn patterns(self) -> &'static [Pattern] {
         match self {
-            DeviceChoice::Sim | DeviceChoice::SimRealtime => &[Pattern::Generator, Pattern::Counter, Pattern::Inputs],
+            DeviceChoice::Sim | DeviceChoice::SimRealtime => {
+                &[Pattern::Generator, Pattern::Counter, Pattern::Inputs]
+            }
             DeviceChoice::Stock => &[Pattern::Inputs, Pattern::Counter, Pattern::Emulation],
             DeviceChoice::Litex => &[Pattern::Inputs, Pattern::Counter, Pattern::Generator],
         }
@@ -77,7 +88,11 @@ impl DeviceChoice {
 fn default_memory_mib() -> u64 {
     let total_kib = std::fs::read_to_string("/proc/meminfo")
         .ok()
-        .and_then(|t| t.lines().find(|l| l.starts_with("MemTotal:")).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()))
+        .and_then(|t| {
+            t.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+        })
         .unwrap_or(4 << 20);
     (total_kib / 1024 / 4).clamp(1024, 32 * 1024)
 }
@@ -89,7 +104,9 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// Name field at the top of a row's context menu. True if the name was edited.
 fn rename_menu(ui: &mut egui::Ui, name: &mut String) -> bool {
     ui.label(RichText::new("Name").color(theme::TEXT_DIM));
-    let changed = ui.add(egui::TextEdit::singleline(name).desired_width(130.0)).changed();
+    let changed = ui
+        .add(egui::TextEdit::singleline(name).desired_width(130.0))
+        .changed();
     ui.separator();
     changed
 }
@@ -99,7 +116,11 @@ fn order_menu(ui: &mut egui::Ui, layout: &mut Layout, row: &Row) -> bool {
     let mut changed = false;
     {
         ui.separator();
-        if ui.button("Hide").on_hover_text("Show it again in Setup > Bus/Signal").clicked() {
+        if ui
+            .button("Hide")
+            .on_hover_text("Show it again in Setup > Bus/Signal")
+            .clicked()
+        {
             match row.kind {
                 RowKind::Signal(ch) => {
                     if let Some(v) = layout.visible.get_mut(ch as usize) {
@@ -135,10 +156,23 @@ fn order_menu(ui: &mut egui::Ui, layout: &mut Layout, row: &Row) -> bool {
             ui.close_menu();
         }
     }
-    if let Some(m) = layout.mover_of(row).filter(|m| !matches!(m, Mover::Group(_))) {
+    if let Some(m) = layout
+        .mover_of(row)
+        .filter(|m| !matches!(m, Mover::Group(_)))
+    {
         let current = layout.group_of(m);
-        let groups: Vec<(usize, String)> =
-            layout.items.iter().enumerate().filter_map(|(i, it)| if let Item::Group(g) = it { Some((i, g.name.clone())) } else { None }).collect();
+        let groups: Vec<(usize, String)> = layout
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| {
+                if let Item::Group(g) = it {
+                    Some((i, g.name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
         {
             ui.menu_button("Add to group", |ui| {
                 if ui.button("New group").clicked() {
@@ -156,7 +190,13 @@ fn order_menu(ui: &mut egui::Ui, layout: &mut Layout, row: &Row) -> bool {
                 }
                 for (i, name) in groups {
                     if Some(i) != current && ui.button(name).clicked() {
-                        changed |= layout.move_to(m, Dest::Group { item: i, pos: usize::MAX });
+                        changed |= layout.move_to(
+                            m,
+                            Dest::Group {
+                                item: i,
+                                pos: usize::MAX,
+                            },
+                        );
                         ui.close_menu();
                     }
                 }
@@ -184,7 +224,10 @@ fn color_menu(ui: &mut egui::Ui, c: &mut [u8; 3]) -> bool {
                     Stroke::new(1.0_f32, theme::BORDER)
                 };
                 ui.painter().rect_stroke(r, 0.0, stroke);
-                if resp.on_hover_text(format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2])).clicked() {
+                if resp
+                    .on_hover_text(format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2]))
+                    .clicked()
+                {
                     *c = *p;
                     changed = true;
                 }
@@ -201,7 +244,9 @@ fn color_menu(ui: &mut egui::Ui, c: &mut [u8; 3]) -> bool {
 /// A colour swatch button that opens the palette menu.
 fn color_button(ui: &mut egui::Ui, c: &mut [u8; 3]) -> bool {
     let mut changed = false;
-    ui.menu_button(RichText::new("████").color(rgb(*c)), |ui| changed = color_menu(ui, c));
+    ui.menu_button(RichText::new("████").color(rgb(*c)), |ui| {
+        changed = color_menu(ui, c)
+    });
     changed
 }
 
@@ -290,7 +335,10 @@ pub struct App {
     /// Capture file of the data on screen.
     file: Option<std::path::PathBuf>,
     last_dir: Option<std::path::PathBuf>,
-    dialog: Option<(files::Purpose, std::sync::mpsc::Receiver<Option<std::path::PathBuf>>)>,
+    dialog: Option<(
+        files::Purpose,
+        std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
+    )>,
     job: Option<files::Job>,
     /// A message for the status bar: text, when, is an error.
     notice: Option<(String, Instant, bool)>,
@@ -389,7 +437,9 @@ impl App {
 
     fn start(&mut self) {
         self.error = None;
-        let Some(channels) = ChannelCount::new(self.channels_n) else { return };
+        let Some(channels) = ChannelCount::new(self.channels_n) else {
+            return;
+        };
         let n = self.channels_n as usize;
         if !self.layout_touched || self.layout.names.len() != n {
             self.layout = match (self.pattern, self.device) {
@@ -441,7 +491,10 @@ impl App {
                 self.follow = self.continuous || triggered;
                 self.pending_fit = !self.continuous;
                 self.markers = Markers::default();
-                self.view = View { start: 0.0, spp: (self.rate / 1e3 / self.plot_width.max(1.0)).max(1.0 / 64.0) };
+                self.view = View {
+                    start: 0.0,
+                    spp: (self.rate / 1e3 / self.plot_width.max(1.0)).max(1.0 / 64.0),
+                };
             }
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -454,15 +507,24 @@ impl App {
         }
         let pre = self.trigger.pre.samples(self.rate);
         let post = (!self.continuous).then(|| self.trigger.post.samples(self.rate).max(1));
-        let kind = match self.trigger.protocol.build(self.trigger.mode).map_err(|e| format!("trigger: {e}"))? {
+        let kind = match self
+            .trigger
+            .protocol
+            .build(self.trigger.mode)
+            .map_err(|e| format!("trigger: {e}"))?
+        {
             Some(p) => {
                 let cfg = match &p {
                     bf_decode::trigger::ProtocolTrigger::Uart(c, _) => Config::Uart(c.clone()),
                     bf_decode::trigger::ProtocolTrigger::Spi(c, _) => Config::Spi(c.clone()),
                     bf_decode::trigger::ProtocolTrigger::I2c(c, _) => Config::I2c(c.clone()),
                 };
-                cfg.check_file_values(channels as u8).map_err(|e| format!("trigger: {e}"))?;
-                TriggerKind::Event(p.build(self.trigger.protocol.trigger_at).map_err(|e| format!("trigger: {e}"))?)
+                cfg.check_file_values(channels as u8)
+                    .map_err(|e| format!("trigger: {e}"))?;
+                TriggerKind::Event(
+                    p.build(self.trigger.protocol.trigger_at)
+                        .map_err(|e| format!("trigger: {e}"))?,
+                )
             }
             None => TriggerKind::Pattern(Trigger::new(&self.trigger.conds[..channels.min(32)])),
         };
@@ -484,7 +546,10 @@ impl App {
     fn poll_session(&mut self) {
         if self.session.as_ref().is_some_and(|s| !s.is_running()) {
             if let Some(s) = self.session.take() {
-                let memory_full = s.stats().memory_full.load(std::sync::atomic::Ordering::SeqCst);
+                let memory_full = s
+                    .stats()
+                    .memory_full
+                    .load(std::sync::atomic::Ordering::SeqCst);
                 let res = s.join();
                 if memory_full {
                     self.notify(format!("stopped: the memory limit of {} MiB was reached (raise it in Setup > Trigger)", self.memory_mib), true);
@@ -530,16 +595,25 @@ impl App {
                     self.markers.set(Which::M2, center);
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.markers.m1.is_some(), egui::Button::new("Go to M1")).clicked() {
+                if ui
+                    .add_enabled(self.markers.m1.is_some(), egui::Button::new("Go to M1"))
+                    .clicked()
+                {
                     self.center_on(self.markers.m1.unwrap_or(0.0));
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.markers.m2.is_some(), egui::Button::new("Go to M2")).clicked() {
+                if ui
+                    .add_enabled(self.markers.m2.is_some(), egui::Button::new("Go to M2"))
+                    .clicked()
+                {
                     self.center_on(self.markers.m2.unwrap_or(0.0));
                     ui.close_menu();
                 }
                 let trig = self.store.read().trigger();
-                if ui.add_enabled(trig.is_some(), egui::Button::new("Go to trigger")).clicked() {
+                if ui
+                    .add_enabled(trig.is_some(), egui::Button::new("Go to trigger"))
+                    .clicked()
+                {
                     self.center_on(trig.unwrap_or(0) as f64);
                     ui.close_menu();
                 }
@@ -552,11 +626,17 @@ impl App {
             });
             ui.menu_button("Run/Stop", |ui| {
                 let running = self.running();
-                if ui.add_enabled(!running, egui::Button::new("Run").shortcut_text("F5")).clicked() {
+                if ui
+                    .add_enabled(!running, egui::Button::new("Run").shortcut_text("F5"))
+                    .clicked()
+                {
                     self.start();
                     ui.close_menu();
                 }
-                if ui.add_enabled(running, egui::Button::new("Stop").shortcut_text("F8")).clicked() {
+                if ui
+                    .add_enabled(running, egui::Button::new("Stop").shortcut_text("F8"))
+                    .clicked()
+                {
                     self.stop();
                     ui.close_menu();
                 }
@@ -565,7 +645,10 @@ impl App {
                 if ui.checkbox(&mut self.follow, "Follow live data").clicked() {
                     ui.close_menu();
                 }
-                if ui.add(egui::Button::new("Fit capture").shortcut_text("Home")).clicked() {
+                if ui
+                    .add(egui::Button::new("Fit capture").shortcut_text("Home"))
+                    .clicked()
+                {
                     self.fit();
                     ui.close_menu();
                 }
@@ -578,11 +661,17 @@ impl App {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.add(egui::Button::new("Taller rows").shortcut_text("Ctrl+Up")).clicked() {
+                if ui
+                    .add(egui::Button::new("Taller rows").shortcut_text("Ctrl+Up"))
+                    .clicked()
+                {
                     self.resize_rows(6.0);
                     ui.close_menu();
                 }
-                if ui.add(egui::Button::new("Shorter rows").shortcut_text("Ctrl+Down")).clicked() {
+                if ui
+                    .add(egui::Button::new("Shorter rows").shortcut_text("Ctrl+Down"))
+                    .clicked()
+                {
                     self.resize_rows(-6.0);
                     ui.close_menu();
                 }
@@ -590,10 +679,16 @@ impl App {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.checkbox(&mut self.show_table, "Annotation table").clicked() {
+                if ui
+                    .checkbox(&mut self.show_table, "Annotation table")
+                    .clicked()
+                {
                     ui.close_menu();
                 }
-                if ui.checkbox(&mut self.show_measure, "Measurements").clicked() {
+                if ui
+                    .checkbox(&mut self.show_measure, "Measurements")
+                    .clicked()
+                {
                     ui.close_menu();
                 }
             });
@@ -617,7 +712,11 @@ impl App {
     }
 
     fn zoom_center(&mut self, factor: f64) {
-        let anchor = if self.follow { self.plot_width } else { self.plot_width / 2.0 };
+        let anchor = if self.follow {
+            self.plot_width
+        } else {
+            self.plot_width / 2.0
+        };
         self.view.zoom_at(anchor, factor);
     }
 
@@ -625,43 +724,64 @@ impl App {
         let running = self.running();
         // Look for an attached analyzer once a second while idle.
         if !running && self.stock_seen.0.elapsed() > Duration::from_secs(1) {
-            self.stock_seen = (Instant::now(), !StockDevice::available().is_empty(), !LitexDevice::available().is_empty());
+            self.stock_seen = (
+                Instant::now(),
+                !StockDevice::available().is_empty(),
+                !LitexDevice::available().is_empty(),
+            );
         }
         let (stock_present, litex_present) = (self.stock_seen.1, self.stock_seen.2);
         let dim = |t: &str| RichText::new(t.to_string()).color(theme::TEXT_DIM);
         ui.horizontal_wrapped(|ui| {
-            let run = egui::Button::new(RichText::new("Run  F5").color(if running { theme::TEXT_DIM } else { theme::RUN }));
+            let run = egui::Button::new(RichText::new("Run  F5").color(if running {
+                theme::TEXT_DIM
+            } else {
+                theme::RUN
+            }));
             if ui.add_enabled(!running, run).clicked() {
                 self.start();
             }
-            let stop = egui::Button::new(RichText::new("Stop F8").color(if running { theme::STOP } else { theme::TEXT_DIM }));
+            let stop = egui::Button::new(RichText::new("Stop F8").color(if running {
+                theme::STOP
+            } else {
+                theme::TEXT_DIM
+            }));
             if ui.add_enabled(running, stop).clicked() {
                 self.stop();
             }
             ui.separator();
             ui.add_enabled_ui(!running, |ui| {
                 ui.label(dim("Device"));
-                egui::ComboBox::from_id_salt("device").selected_text(self.device.label()).show_ui(ui, |ui| {
-                    for d in [DeviceChoice::Stock, DeviceChoice::Litex, DeviceChoice::SimRealtime, DeviceChoice::Sim] {
-                        let present = match d {
-                            DeviceChoice::Stock => stock_present,
-                            DeviceChoice::Litex => litex_present,
-                            _ => true,
-                        };
-                        if present || self.device == d {
-                            ui.selectable_value(&mut self.device, d, d.label());
+                egui::ComboBox::from_id_salt("device")
+                    .selected_text(self.device.label())
+                    .show_ui(ui, |ui| {
+                        for d in [
+                            DeviceChoice::Stock,
+                            DeviceChoice::Litex,
+                            DeviceChoice::SimRealtime,
+                            DeviceChoice::Sim,
+                        ] {
+                            let present = match d {
+                                DeviceChoice::Stock => stock_present,
+                                DeviceChoice::Litex => litex_present,
+                                _ => true,
+                            };
+                            if present || self.device == d {
+                                ui.selectable_value(&mut self.device, d, d.label());
+                            }
                         }
-                    }
-                });
+                    });
                 if !self.device.patterns().contains(&self.pattern) {
                     self.pattern = self.device.patterns()[0];
                 }
                 ui.label(dim("Channels"));
-                egui::ComboBox::from_id_salt("channels").selected_text(self.channels_n.to_string()).show_ui(ui, |ui| {
-                    for n in [4u8, 8, 16] {
-                        ui.selectable_value(&mut self.channels_n, n, n.to_string());
-                    }
-                });
+                egui::ComboBox::from_id_salt("channels")
+                    .selected_text(self.channels_n.to_string())
+                    .show_ui(ui, |ui| {
+                        for n in [4u8, 8, 16] {
+                            ui.selectable_value(&mut self.channels_n, n, n.to_string());
+                        }
+                    });
                 let max = match self.channels_n {
                     4 => 800e6,
                     8 => 400e6,
@@ -669,35 +789,56 @@ impl App {
                 };
                 self.rate = self.rate.min(max);
                 ui.label(dim("Sample rate"));
-                egui::ComboBox::from_id_salt("rate").selected_text(format_hz(self.rate)).show_ui(ui, |ui| {
-                    for r in [5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 400e6, 800e6] {
-                        if r <= max {
-                            ui.selectable_value(&mut self.rate, r, format_hz(r));
+                egui::ComboBox::from_id_salt("rate")
+                    .selected_text(format_hz(self.rate))
+                    .show_ui(ui, |ui| {
+                        for r in [5e6, 10e6, 20e6, 50e6, 100e6, 200e6, 400e6, 800e6] {
+                            if r <= max {
+                                ui.selectable_value(&mut self.rate, r, format_hz(r));
+                            }
                         }
-                    }
-                });
+                    });
                 ui.label(dim("Source"));
-                egui::ComboBox::from_id_salt("pattern").selected_text(self.pattern.name()).show_ui(ui, |ui| {
-                    for &p in self.device.patterns() {
-                        ui.selectable_value(&mut self.pattern, p, p.name());
-                    }
-                });
+                egui::ComboBox::from_id_salt("pattern")
+                    .selected_text(self.pattern.name())
+                    .show_ui(ui, |ui| {
+                        for &p in self.device.patterns() {
+                            ui.selectable_value(&mut self.pattern, p, p.name());
+                        }
+                    });
                 if self.device.has_threshold() {
                     ui.label(dim("Threshold"));
-                    ui.add(egui::DragValue::new(&mut self.threshold).speed(0.02).range(0.0..=3.3).suffix(" V").fixed_decimals(2));
+                    ui.add(
+                        egui::DragValue::new(&mut self.threshold)
+                            .speed(0.02)
+                            .range(0.0..=3.3)
+                            .suffix(" V")
+                            .fixed_decimals(2),
+                    );
                 }
                 ui.label(dim("Mode"));
                 egui::ComboBox::from_id_salt("mode")
-                    .selected_text(if self.continuous { "Continuous" } else { "Single" })
+                    .selected_text(if self.continuous {
+                        "Continuous"
+                    } else {
+                        "Single"
+                    })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.continuous, true, "Continuous");
                         ui.selectable_value(&mut self.continuous, false, "Single");
                     });
                 if !self.continuous && !self.trigger.enabled {
-                    ui.add(egui::DragValue::new(&mut self.samples).speed(1e5).range(1e3..=4e9).suffix(" Sa")).on_hover_text("Samples to capture");
+                    ui.add(
+                        egui::DragValue::new(&mut self.samples)
+                            .speed(1e5)
+                            .range(1e3..=4e9)
+                            .suffix(" Sa"),
+                    )
+                    .on_hover_text("Samples to capture");
                 }
                 ui.separator();
-                ui.checkbox(&mut self.trigger.enabled, "Trigger").on_hover_text("Wait for a trigger condition (Setup > Trigger...)");
+                ui.checkbox(&mut self.trigger.enabled, "Trigger")
+                    .on_hover_text("Wait for a trigger condition (Setup > Trigger...)");
                 if ui.button("...").on_hover_text("Trigger setup").clicked() {
                     self.show_trigger = true;
                 }
@@ -706,14 +847,26 @@ impl App {
                     let window = if self.continuous {
                         format!("{} before, until Stop", self.trigger.pre.text())
                     } else {
-                        format!("{} before, {} after", self.trigger.pre.text(), self.trigger.post.text())
+                        format!(
+                            "{} before, {} after",
+                            self.trigger.pre.text(),
+                            self.trigger.post.text()
+                        )
                     };
                     ui.label(RichText::new(self.trigger.summary(&names)).color(theme::DEC_WARN));
                     ui.label(RichText::new(window).color(theme::TEXT_DIM));
                 }
             });
-            if let Some(s) = self.session.as_ref().filter(|s| matches!(s.stats().phase(), Phase::Filling | Phase::Waiting)) {
-                if ui.button(RichText::new("Force trigger").color(theme::DEC_WARN)).on_hover_text("Trigger now, whatever the condition").clicked() {
+            if let Some(s) = self
+                .session
+                .as_ref()
+                .filter(|s| matches!(s.stats().phase(), Phase::Filling | Phase::Waiting))
+            {
+                if ui
+                    .button(RichText::new("Force trigger").color(theme::DEC_WARN))
+                    .on_hover_text("Trigger now, whatever the condition")
+                    .clicked()
+                {
                     s.force_trigger();
                 }
             }
@@ -726,7 +879,12 @@ impl App {
             (s.sample_rate(), self.origin_of(&s))
         };
         let chip = |ui: &mut egui::Ui, name: &str, color: Color32| {
-            ui.label(RichText::new(format!(" {name} ")).color(Color32::BLACK).background_color(color).monospace());
+            ui.label(
+                RichText::new(format!(" {name} "))
+                    .color(Color32::BLACK)
+                    .background_color(color)
+                    .monospace(),
+            );
         };
         let pos_text = |p: Option<f64>| match p {
             Some(s) => format_split((s - origin) / rate, 1.0 / rate),
@@ -749,7 +907,9 @@ impl App {
                         ui.label(RichText::new(format!("(1/dt = {f})")).color(theme::TEXT_DIM));
                     }
                     if let Some(d) = self.markers.delta_samples() {
-                        ui.label(RichText::new(format!("{:.0} Sa", d.abs())).color(theme::TEXT_DIM));
+                        ui.label(
+                            RichText::new(format!("{:.0} Sa", d.abs())).color(theme::TEXT_DIM),
+                        );
                     }
                 }
                 None => {
@@ -777,24 +937,44 @@ impl App {
                 let now = Instant::now();
                 if now.duration_since(self.rate_stat.0) > Duration::from_millis(500) {
                     let dt = now.duration_since(self.rate_stat.0).as_secs_f64();
-                    self.rate_stat = (now, bytes, bytes.saturating_sub(self.rate_stat.1) as f64 / dt / 1e6);
+                    self.rate_stat = (
+                        now,
+                        bytes,
+                        bytes.saturating_sub(self.rate_stat.1) as f64 / dt / 1e6,
+                    );
                 }
                 match s.stats().phase() {
-                    Phase::Filling => ui.label(RichText::new("PRE-TRIGGER").color(theme::DEC_WARN).strong()),
-                    Phase::Waiting => ui.label(RichText::new("WAITING FOR TRIGGER").color(theme::DEC_WARN).strong()),
+                    Phase::Filling => {
+                        ui.label(RichText::new("PRE-TRIGGER").color(theme::DEC_WARN).strong())
+                    }
+                    Phase::Waiting => ui.label(
+                        RichText::new("WAITING FOR TRIGGER")
+                            .color(theme::DEC_WARN)
+                            .strong(),
+                    ),
                     Phase::Triggered => {
-                        let done = store.trigger().zip(self.post_target).map(|(t, post)| 100.0 * store.end().saturating_sub(t) as f64 / post.max(1) as f64);
-                        ui.label(RichText::new(match done {
-                            Some(p) => format!("TRIGGERED {:.0} %", p.min(100.0)),
-                            None => "TRIGGERED".to_string(),
-                        }).color(theme::RUN).strong())
+                        let done = store.trigger().zip(self.post_target).map(|(t, post)| {
+                            100.0 * store.end().saturating_sub(t) as f64 / post.max(1) as f64
+                        });
+                        ui.label(
+                            RichText::new(match done {
+                                Some(p) => format!("TRIGGERED {:.0} %", p.min(100.0)),
+                                None => "TRIGGERED".to_string(),
+                            })
+                            .color(theme::RUN)
+                            .strong(),
+                        )
                     }
                     Phase::Free => ui.label(RichText::new("RUNNING").color(theme::RUN).strong()),
                 };
                 ui.label(format!("{} Sa   {:.1} MB/s", store.end(), self.rate_stat.2));
             } else if let Some(r) = &self.last_result {
                 ui.label(RichText::new("STOPPED").color(theme::TEXT_DIM).strong());
-                ui.label(format!("{} Sa in {:.2} s", r.samples, r.elapsed.as_secs_f64()));
+                ui.label(format!(
+                    "{} Sa in {:.2} s",
+                    r.samples,
+                    r.elapsed.as_secs_f64()
+                ));
             } else if let Some(f) = self.file.as_ref().and_then(|f| f.file_name()) {
                 ui.label(RichText::new("FILE").color(theme::TEXT_DIM).strong());
                 ui.label(f.to_string_lossy().into_owned());
@@ -802,14 +982,28 @@ impl App {
                 ui.label(RichText::new("IDLE").color(theme::TEXT_DIM).strong());
             }
             ui.separator();
-            ui.label(format!("{}  {} ch", format_hz(store.sample_rate()), store.channels()));
+            ui.label(format!(
+                "{}  {} ch",
+                format_hz(store.sample_rate()),
+                store.channels()
+            ));
             if let Some(t) = store.trigger() {
                 ui.separator();
                 let rate = store.sample_rate();
-                ui.label(RichText::new(format!("trigger at {} from start", format_split(t as f64 / rate, 1.0 / rate))).color(theme::DEC_WARN));
+                ui.label(
+                    RichText::new(format!(
+                        "trigger at {} from start",
+                        format_split(t as f64 / rate, 1.0 / rate)
+                    ))
+                    .color(theme::DEC_WARN),
+                );
             }
             ui.separator();
-            ui.label(format!("memory {:.1} MB ({} events)", store.memory_bytes() as f64 / 1e6, store.event_count()));
+            ui.label(format!(
+                "memory {:.1} MB ({} events)",
+                store.memory_bytes() as f64 / 1e6,
+                store.event_count()
+            ));
             if let Some(e) = &self.error {
                 ui.separator();
                 ui.colored_label(theme::STOP, e);
@@ -821,21 +1015,40 @@ impl App {
             } else if let Some((msg, at, err)) = &notice {
                 if at.elapsed() < Duration::from_secs(12) {
                     ui.separator();
-                    ui.add(egui::Label::new(RichText::new(msg.as_str()).color(if *err { theme::STOP } else { theme::RUN })).truncate());
+                    ui.add(
+                        egui::Label::new(RichText::new(msg.as_str()).color(if *err {
+                            theme::STOP
+                        } else {
+                            theme::RUN
+                        }))
+                        .truncate(),
+                    );
                 }
             }
             if let Some(text) = &selected_text {
                 ui.separator();
-                ui.add(egui::Label::new(RichText::new(text.as_str()).color(theme::DEC_ADDR)).truncate());
+                ui.add(
+                    egui::Label::new(RichText::new(text.as_str()).color(theme::DEC_ADDR))
+                        .truncate(),
+                );
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let rate = store.sample_rate();
                 if let Some(s) = self.hover_sample {
-                    ui.label(format!("cursor {}", format_split((s - origin) / rate, 1.0 / rate)));
+                    ui.label(format!(
+                        "cursor {}",
+                        format_split((s - origin) / rate, 1.0 / rate)
+                    ));
                 }
                 if let Some(e) = self.hover_edge {
                     ui.separator();
-                    ui.label(RichText::new(format!("edge {}", format_split((e as f64 - origin) / rate, 1.0 / rate))).color(theme::SNAP));
+                    ui.label(
+                        RichText::new(format!(
+                            "edge {}",
+                            format_split((e as f64 - origin) / rate, 1.0 / rate)
+                        ))
+                        .color(theme::SNAP),
+                    );
                 }
             });
         });
@@ -847,8 +1060,17 @@ impl App {
         let store = self.store.read();
         let rate = store.sample_rate();
         let range = store.range();
-        let strip = Rect::from_min_max(pos2(rect.left() + GUTTER, rect.top() + 7.0), pos2(rect.right() - 6.0, rect.bottom() - 7.0));
-        painter.text(pos2(rect.left() + 8.0, rect.top() + 6.0), Align2::LEFT_TOP, "Overview", FontId::monospace(11.0), theme::TEXT);
+        let strip = Rect::from_min_max(
+            pos2(rect.left() + GUTTER, rect.top() + 7.0),
+            pos2(rect.right() - 6.0, rect.bottom() - 7.0),
+        );
+        painter.text(
+            pos2(rect.left() + 8.0, rect.top() + 6.0),
+            Align2::LEFT_TOP,
+            "Overview",
+            FontId::monospace(11.0),
+            theme::TEXT,
+        );
         if !store.is_empty() {
             painter.text(
                 pos2(rect.left() + 8.0, rect.top() + 22.0),
@@ -866,19 +1088,32 @@ impl App {
             painter.rect_filled(strip.shrink(1.0), 0.0, Color32::from_gray(0x16));
             // The part of the capture shown in the waveform window.
             let w0 = x_of(self.view.start).clamp(strip.left(), strip.right());
-            let w1 = x_of(self.view.end(self.plot_width)).clamp(strip.left(), strip.right()).max(w0 + 2.0);
-            let win = Rect::from_min_max(pos2(w0, strip.top() + 1.0), pos2(w1, strip.bottom() - 1.0));
+            let w1 = x_of(self.view.end(self.plot_width))
+                .clamp(strip.left(), strip.right())
+                .max(w0 + 2.0);
+            let win =
+                Rect::from_min_max(pos2(w0, strip.top() + 1.0), pos2(w1, strip.bottom() - 1.0));
             painter.rect_filled(win, 0.0, Color32::from_white_alpha(0x28));
             painter.rect_stroke(win, 0.0, Stroke::new(1.0_f32, theme::TRACE));
-            for (p, c) in [(store.trigger().map(|t| t as f64), theme::DEC_WARN), (self.markers.m1, theme::M1), (self.markers.m2, theme::M2)] {
+            for (p, c) in [
+                (store.trigger().map(|t| t as f64), theme::DEC_WARN),
+                (self.markers.m1, theme::M1),
+                (self.markers.m2, theme::M2),
+            ] {
                 if let Some(p) = p {
                     let x = x_of(p).clamp(strip.left(), strip.right());
-                    painter.line_segment([pos2(x, strip.top()), pos2(x, strip.bottom())], Stroke::new(2.0_f32, c));
+                    painter.line_segment(
+                        [pos2(x, strip.top()), pos2(x, strip.bottom())],
+                        Stroke::new(2.0_f32, c),
+                    );
                 }
             }
         }
         if let Some(p) = resp.interact_pointer_pos() {
-            if (resp.clicked() || resp.dragged()) && strip.expand2(vec2(200.0, 10.0)).contains(p) && !store.is_empty() {
+            if (resp.clicked() || resp.dragged())
+                && strip.expand2(vec2(200.0, 10.0)).contains(p)
+                && !store.is_empty()
+            {
                 let f = ((p.x - strip.left()) / strip.width()).clamp(0.0, 1.0) as f64;
                 let s = range.start as f64 + f * len;
                 self.view.start = s - self.plot_width * self.view.spp / 2.0;
@@ -951,7 +1186,9 @@ impl App {
         if let RowKind::Decode { id, lane } = row.kind {
             return self.decoder_text_at(id, lane, sample);
         }
-        let Some(state) = store.state_at(sample) else { return "-".into() };
+        let Some(state) = store.state_at(sample) else {
+            return "-".into();
+        };
         match row.kind {
             RowKind::Signal(ch) => ((state >> ch) & 1).to_string(),
             RowKind::Bus(i) => match self.layout.bus(i) {
@@ -978,7 +1215,10 @@ impl App {
         } else {
             a.label(e.format)
         };
-        Some(format!("{} {}: {}", e.name, e.handle.lanes[sel.lane as usize], text))
+        Some(format!(
+            "{} {}: {}",
+            e.name, e.handle.lanes[sel.lane as usize], text
+        ))
     }
 
     fn entry(&self, id: u32) -> Option<&Entry> {
@@ -988,7 +1228,12 @@ impl App {
     /// The lanes of decoder `id` that have a row (the used ones).
     fn decoder_lanes(&self, id: u32) -> Vec<u8> {
         self.entry(id)
-            .map(|e| (0..e.handle.lanes.len()).filter(|&l| e.handle.lane_used.get(l).copied().unwrap_or(false)).map(|l| l as u8).collect())
+            .map(|e| {
+                (0..e.handle.lanes.len())
+                    .filter(|&l| e.handle.lane_used.get(l).copied().unwrap_or(false))
+                    .map(|l| l as u8)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -1007,7 +1252,9 @@ impl App {
 
     /// Text of the annotation covering `sample` in a decoder lane (for the marker columns).
     fn decoder_text_at(&self, id: u32, lane: u8, sample: u64) -> String {
-        let Some(e) = self.entry(id) else { return "-".into() };
+        let Some(e) = self.entry(id) else {
+            return "-".into();
+        };
         let anns = e.handle.anns.read();
         let l = anns.visible(lane as usize, sample..sample + 1);
         l.first().map_or("-".into(), |a| {
@@ -1024,9 +1271,19 @@ impl App {
         let handle = self.engine.add(cfg.build());
         let name = cfg.kind().label().to_string();
         // UART output is mostly text: show characters and telegrams as ASCII by default.
-        let format = if matches!(cfg, Config::Uart(_)) { Format::Ascii } else { Format::Hex };
+        let format = if matches!(cfg, Config::Uart(_)) {
+            Format::Ascii
+        } else {
+            Format::Hex
+        };
         self.layout.add_decoder(handle.id.0);
-        self.decoders.push(Entry { handle, cfg, name, format, color: crate::rows::DEFAULT_COLOR });
+        self.decoders.push(Entry {
+            handle,
+            cfg,
+            name,
+            format,
+            color: crate::rows::DEFAULT_COLOR,
+        });
     }
 
     /// Apply changed settings: the decoder starts over with its new configuration.
@@ -1034,7 +1291,8 @@ impl App {
         let old = self.decoders[i].handle.id;
         self.engine.remove(old);
         self.decoders[i].handle = self.engine.add(self.decoders[i].cfg.build());
-        self.layout.replace_decoder(old.0, self.decoders[i].handle.id.0);
+        self.layout
+            .replace_decoder(old.0, self.decoders[i].handle.id.0);
         self.selected_ann = None;
     }
 
@@ -1044,7 +1302,10 @@ impl App {
             return false;
         }
         let idx = ((p.y - plot.top() + self.scroll_y) / row_h).floor();
-        let Some(RowKind::Decode { id, lane }) = (idx >= 0.0).then(|| rows.get(idx as usize).map(|r| r.kind)).flatten() else {
+        let Some(RowKind::Decode { id, lane }) = (idx >= 0.0)
+            .then(|| rows.get(idx as usize).map(|r| r.kind))
+            .flatten()
+        else {
             return false;
         };
         let s = self.view.sample_at((p.x - plot.left()) as f64);
@@ -1055,7 +1316,15 @@ impl App {
             let at = s.max(0.0) as u64;
             let i = l.partition_point(|a| a.end <= at);
             // The item containing the click, else the nearest one within a few pixels.
-            let dist = |a: &bf_decode::Annotation| if (a.start as f64) > s { a.start as f64 - s } else if (a.end as f64) <= s { s - a.end as f64 } else { 0.0 };
+            let dist = |a: &bf_decode::Annotation| {
+                if (a.start as f64) > s {
+                    a.start as f64 - s
+                } else if (a.end as f64) <= s {
+                    s - a.end as f64
+                } else {
+                    0.0
+                }
+            };
             [i.checked_sub(1), Some(i)]
                 .into_iter()
                 .flatten()
@@ -1077,9 +1346,24 @@ impl App {
     /// Make `a` (item `idx` of a decoder lane) the selection: highlight it, put the markers on it and
     /// show it in the table. `recenter` also moves the waveform to it; `from_table` means the table
     /// already shows it (no scrolling needed).
-    fn select_annotation(&mut self, id: u32, lane: u8, a: bf_decode::Annotation, idx: usize, recenter: bool, from_table: bool) {
-        self.selected_ann = Some(decode_ui::Selected { id, lane, start: a.start });
-        self.markers = Markers { m1: Some(a.start as f64), m2: Some(a.end as f64) };
+    fn select_annotation(
+        &mut self,
+        id: u32,
+        lane: u8,
+        a: bf_decode::Annotation,
+        idx: usize,
+        recenter: bool,
+        from_table: bool,
+    ) {
+        self.selected_ann = Some(decode_ui::Selected {
+            id,
+            lane,
+            start: a.start,
+        });
+        self.markers = Markers {
+            m1: Some(a.start as f64),
+            m2: Some(a.end as f64),
+        };
         if let Some(ti) = self.decoders.iter().position(|e| e.handle.id.0 == id) {
             self.table.entry = ti;
             self.table.lane = lane as usize;
@@ -1098,27 +1382,51 @@ impl App {
     }
 
     /// Sample to snap to near `s` for the row at screen height `y` (or the selected row).
-    fn snap_target(&self, store: &CaptureStore, s: f64, y: f32, plot: Rect, rows: &[Row], row_h: f32) -> Option<(u64, usize)> {
+    fn snap_target(
+        &self,
+        store: &CaptureStore,
+        s: f64,
+        y: f32,
+        plot: Rect,
+        rows: &[Row],
+        row_h: f32,
+    ) -> Option<(u64, usize)> {
         let idx = if y >= plot.top() {
             let i = ((y - plot.top() + self.scroll_y) / row_h).floor();
             (i >= 0.0).then_some(i as usize)
         } else {
-            self.selected.and_then(|k| rows.iter().position(|r| r.kind == k))
+            self.selected
+                .and_then(|k| rows.iter().position(|r| r.kind == k))
         }?;
         let row = rows.get(idx)?;
-        let p = snap_to_edge(store, &self.layout.row_channels(row), s, 8.0 * self.view.spp)?;
+        let p = snap_to_edge(
+            store,
+            &self.layout.row_channels(row),
+            s,
+            8.0 * self.view.spp,
+        )?;
         Some((p, idx))
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn place_marker(&mut self, store: &CaptureStore, w: Which, x: f32, y: f32, plot: Rect, rows: &[Row], row_h: f32) {
+    fn place_marker(
+        &mut self,
+        store: &CaptureStore,
+        w: Which,
+        x: f32,
+        y: f32,
+        plot: Rect,
+        rows: &[Row],
+        row_h: f32,
+    ) {
         let mut s = self.view.sample_at((x - plot.left()) as f64);
         if self.snap && self.row_drag.is_none() && self.opts.dragging.is_none() {
             if let Some((p, _)) = self.snap_target(store, s, y, plot, rows, row_h) {
                 s = p as f64;
             }
         }
-        self.markers.set(w, s.clamp(store.first_sample() as f64, store.end() as f64));
+        self.markers
+            .set(w, s.clamp(store.first_sample() as f64, store.end() as f64));
     }
 
     fn waveform_panel(&mut self, ui: &mut egui::Ui) {
@@ -1130,21 +1438,38 @@ impl App {
 
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
         let painter = ui.painter_at(rect);
-        let ruler = Rect::from_min_size(pos2(rect.left() + GUTTER, rect.top()), vec2(rect.width() - GUTTER, RULER_H));
-        let plot = Rect::from_min_max(pos2(rect.left() + GUTTER, rect.top() + RULER_H), rect.right_bottom());
-        let gutter = Rect::from_min_max(pos2(rect.left(), plot.top()), pos2(rect.left() + GUTTER, rect.bottom()));
+        let ruler = Rect::from_min_size(
+            pos2(rect.left() + GUTTER, rect.top()),
+            vec2(rect.width() - GUTTER, RULER_H),
+        );
+        let plot = Rect::from_min_max(
+            pos2(rect.left() + GUTTER, rect.top() + RULER_H),
+            rect.right_bottom(),
+        );
+        let gutter = Rect::from_min_max(
+            pos2(rect.left(), plot.top()),
+            pos2(rect.left() + GUTTER, rect.bottom()),
+        );
         self.plot_width = plot.width() as f64;
 
         let rows = self.layout.rows_with(&|id| self.decoder_lanes(id));
         let row_h = if self.row_auto {
-            let auto = if rows.is_empty() { 24.0 } else { (plot.height() / rows.len() as f32).clamp(18.0, 30.0) };
+            let auto = if rows.is_empty() {
+                24.0
+            } else {
+                (plot.height() / rows.len() as f32).clamp(18.0, 30.0)
+            };
             self.row_h = auto; // shown in the header, and the starting point for manual adjustment
             auto
         } else {
             self.row_h
         };
         let max_scroll = (row_h * rows.len() as f32 - plot.height()).max(0.0);
-        let pointer = self.opts.hover.map(|(x, y)| pos2(plot.left() + x, plot.top() + y)).or(ui.input(|i| i.pointer.hover_pos()));
+        let pointer = self
+            .opts
+            .hover
+            .map(|(x, y)| pos2(plot.left() + x, plot.top() + y))
+            .or(ui.input(|i| i.pointer.hover_pos()));
         if pointer.is_some_and(|p| gutter.contains(p)) {
             self.scroll_y -= ui.input(|i| i.smooth_scroll_delta.y);
         }
@@ -1155,12 +1480,21 @@ impl App {
         let ruler_resp = ui.interact(ruler, ui.id().with("ruler"), Sense::click_and_drag());
         let hovered = plot_resp.hovered() || ruler_resp.hovered();
         if hovered {
-            let (scroll, zoom_delta, shift) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift));
+            let (scroll, zoom_delta, shift) =
+                ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift));
             let hover_x = pointer.map_or(0.0, |p| (p.x - plot.left()) as f64);
-            let anchor = if self.follow { self.plot_width } else { hover_x };
+            let anchor = if self.follow {
+                self.plot_width
+            } else {
+                hover_x
+            };
             let mut factor = zoom_delta as f64;
             if shift || scroll.x.abs() > scroll.y.abs() {
-                let dx = if scroll.x.abs() > scroll.y.abs() { scroll.x } else { scroll.y };
+                let dx = if scroll.x.abs() > scroll.y.abs() {
+                    scroll.x
+                } else {
+                    scroll.y
+                };
                 if dx != 0.0 {
                     self.view.pan_px(dx as f64);
                     self.follow = false;
@@ -1185,7 +1519,9 @@ impl App {
             }
             if resp.dragged() {
                 match (self.drag_marker, resp.interact_pointer_pos()) {
-                    (Some(w), Some(p)) => self.place_marker(&store, w, p.x, p.y, plot, &rows, row_h),
+                    (Some(w), Some(p)) => {
+                        self.place_marker(&store, w, p.x, p.y, plot, &rows, row_h)
+                    }
                     _ => {
                         self.view.pan_px(resp.drag_delta().x as f64);
                         self.follow = false;
@@ -1200,7 +1536,15 @@ impl App {
                     // A click on a decoded item selects it (and shows it in the table); elsewhere it places a marker.
                     let picked = !in_ruler && self.click_annotation(p, plot, &rows, row_h);
                     if !picked {
-                        self.place_marker(&store, if shift { Which::M2 } else { Which::M1 }, p.x, p.y, plot, &rows, row_h);
+                        self.place_marker(
+                            &store,
+                            if shift { Which::M2 } else { Which::M1 },
+                            p.x,
+                            p.y,
+                            plot,
+                            &rows,
+                            row_h,
+                        );
                     }
                 } else if resp.secondary_clicked() {
                     self.place_marker(&store, Which::M2, p.x, p.y, plot, &rows, row_h);
@@ -1230,22 +1574,52 @@ impl App {
         painter.rect_filled(ruler, 0.0, theme::PLOT_BG);
         let plot_p = painter.with_clip_rect(plot);
         draw_grid(&plot_p, plot, &self.view, rate, origin);
-        draw_ruler(&painter.with_clip_rect(ruler), ruler, &self.view, rate, origin);
+        draw_ruler(
+            &painter.with_clip_rect(ruler),
+            ruler,
+            &self.view,
+            rate,
+            origin,
+        );
 
         // Column headers.
         let head = Rect::from_min_size(rect.left_top(), vec2(GUTTER, RULER_H));
-        painter.text(pos2(head.left() + 8.0, head.center().y), Align2::LEFT_CENTER, "Bus/Signal", FontId::monospace(11.0), theme::TEXT_DIM);
-        for (k, (name, color)) in [("M1", theme::M1), ("M2", theme::M2)].into_iter().enumerate() {
+        painter.text(
+            pos2(head.left() + 8.0, head.center().y),
+            Align2::LEFT_CENTER,
+            "Bus/Signal",
+            FontId::monospace(11.0),
+            theme::TEXT_DIM,
+        );
+        for (k, (name, color)) in [("M1", theme::M1), ("M2", theme::M2)]
+            .into_iter()
+            .enumerate()
+        {
             painter.text(
-                pos2(head.left() + NAME_W + VAL_W * (k as f32 + 1.0) - 6.0, head.center().y),
+                pos2(
+                    head.left() + NAME_W + VAL_W * (k as f32 + 1.0) - 6.0,
+                    head.center().y,
+                ),
                 Align2::RIGHT_CENTER,
                 name,
                 FontId::monospace(11.0),
                 color,
             );
         }
-        painter.line_segment([pos2(rect.left(), ruler.bottom()), pos2(ruler.left(), ruler.bottom())], Stroke::new(1.0_f32, theme::BORDER));
-        painter.line_segment([pos2(plot.left(), rect.top()), pos2(plot.left(), rect.bottom())], Stroke::new(1.0_f32, theme::BORDER));
+        painter.line_segment(
+            [
+                pos2(rect.left(), ruler.bottom()),
+                pos2(ruler.left(), ruler.bottom()),
+            ],
+            Stroke::new(1.0_f32, theme::BORDER),
+        );
+        painter.line_segment(
+            [
+                pos2(plot.left(), rect.top()),
+                pos2(plot.left(), rect.bottom()),
+            ],
+            Stroke::new(1.0_f32, theme::BORDER),
+        );
 
         let gutter_p = painter.with_clip_rect(gutter);
         let mut toggle: Option<usize> = None;
@@ -1271,11 +1645,24 @@ impl App {
             let indent = row.depth as f32 * 16.0;
             if let RowKind::Bus(item) | RowKind::Group(item) = row.kind {
                 let expanded = self.layout.is_expanded(item);
-                let box_r = Rect::from_center_size(pos2(label.left() + 12.0, r.center().y), vec2(9.0, 9.0));
+                let box_r =
+                    Rect::from_center_size(pos2(label.left() + 12.0, r.center().y), vec2(9.0, 9.0));
                 gutter_p.rect_stroke(box_r, 0.0, Stroke::new(1.0_f32, theme::TEXT_DIM));
-                gutter_p.line_segment([box_r.left_center() + vec2(2.0, 0.0), box_r.right_center() - vec2(2.0, 0.0)], Stroke::new(1.0_f32, theme::TEXT));
+                gutter_p.line_segment(
+                    [
+                        box_r.left_center() + vec2(2.0, 0.0),
+                        box_r.right_center() - vec2(2.0, 0.0),
+                    ],
+                    Stroke::new(1.0_f32, theme::TEXT),
+                );
                 if !expanded {
-                    gutter_p.line_segment([box_r.center_top() + vec2(0.0, 2.0), box_r.center_bottom() - vec2(0.0, 2.0)], Stroke::new(1.0_f32, theme::TEXT));
+                    gutter_p.line_segment(
+                        [
+                            box_r.center_top() + vec2(0.0, 2.0),
+                            box_r.center_bottom() - vec2(0.0, 2.0),
+                        ],
+                        Stroke::new(1.0_f32, theme::TEXT),
+                    );
                 }
             }
             gutter_p.text(
@@ -1288,20 +1675,52 @@ impl App {
             for (k, at) in [self.markers.m1, self.markers.m2].into_iter().enumerate() {
                 // Short values are right aligned; long ones (a decoded telegram) start at the left of
                 // their cell and are cut off at its edge instead of running over the row name.
-                let cell = Rect::from_min_size(pos2(label.left() + NAME_W + VAL_W * k as f32, r.top()), vec2(VAL_W, row_h));
+                let cell = Rect::from_min_size(
+                    pos2(label.left() + NAME_W + VAL_W * k as f32, r.top()),
+                    vec2(VAL_W, row_h),
+                );
                 let color = if k == 0 { theme::M1 } else { theme::M2 };
-                let galley = gutter_p.layout_no_wrap(self.value_text(&store, row, at), small.clone(), color);
-                let x = if galley.size().x > VAL_W - 8.0 { cell.left() + 3.0 } else { cell.right() - 6.0 - galley.size().x };
-                gutter_p.with_clip_rect(cell).galley(pos2(x, r.center().y - galley.size().y / 2.0), galley, color);
+                let galley =
+                    gutter_p.layout_no_wrap(self.value_text(&store, row, at), small.clone(), color);
+                let x = if galley.size().x > VAL_W - 8.0 {
+                    cell.left() + 3.0
+                } else {
+                    cell.right() - 6.0 - galley.size().x
+                };
+                gutter_p.with_clip_rect(cell).galley(
+                    pos2(x, r.center().y - galley.size().y / 2.0),
+                    galley,
+                    color,
+                );
             }
             match row.kind {
                 RowKind::Signal(ch) => {
-                    let c = self.layout.colors.get(ch as usize).copied().unwrap_or(crate::rows::DEFAULT_COLOR);
-                    draw_signal(&plot_p.with_clip_rect(r.intersect(plot)), &store, ch, r, &self.view, rgb(c));
+                    let c = self
+                        .layout
+                        .colors
+                        .get(ch as usize)
+                        .copied()
+                        .unwrap_or(crate::rows::DEFAULT_COLOR);
+                    draw_signal(
+                        &plot_p.with_clip_rect(r.intersect(plot)),
+                        &store,
+                        ch,
+                        r,
+                        &self.view,
+                        rgb(c),
+                    );
                 }
                 RowKind::Bus(item) => {
                     if let Some(b) = self.layout.bus(item) {
-                        draw_bus(&plot_p.with_clip_rect(r.intersect(plot)), &store, &b.members, b.radix, r, &self.view, rgb(b.color));
+                        draw_bus(
+                            &plot_p.with_clip_rect(r.intersect(plot)),
+                            &store,
+                            &b.members,
+                            b.radix,
+                            r,
+                            &self.view,
+                            rgb(b.color),
+                        );
                     }
                 }
                 RowKind::Group(_) => {}
@@ -1309,7 +1728,10 @@ impl App {
                     if let Some(e) = self.entry(id) {
                         let anns = e.handle.anns.read();
                         if let Some(l) = anns.lanes.get(lane as usize) {
-                            let sel = self.selected_ann.filter(|s| s.id == id && s.lane == lane).map(|s| s.start);
+                            let sel = self
+                                .selected_ann
+                                .filter(|s| s.id == id && s.lane == lane)
+                                .map(|s| s.start);
                             draw_annotations(
                                 &plot_p.with_clip_rect(r.intersect(plot)),
                                 l,
@@ -1324,11 +1746,18 @@ impl App {
                     }
                 }
             }
-            plot_p.line_segment([pos2(rect.left(), r.bottom()), pos2(r.right(), r.bottom())], Stroke::new(1.0_f32, theme::ROW_SEP));
+            plot_p.line_segment(
+                [pos2(rect.left(), r.bottom()), pos2(r.right(), r.bottom())],
+                Stroke::new(1.0_f32, theme::ROW_SEP),
+            );
 
             let hit = label.intersect(gutter);
             if hit.height() > 2.0 {
-                let resp = ui.interact(Rect::from_min_size(hit.left_top(), vec2(NAME_W, hit.height())), ui.id().with(("row", i)), Sense::click_and_drag());
+                let resp = ui.interact(
+                    Rect::from_min_size(hit.left_top(), vec2(NAME_W, hit.height())),
+                    ui.id().with(("row", i)),
+                    Sense::click_and_drag(),
+                );
                 if resp.drag_started() {
                     self.row_drag = self.layout.mover_of(row);
                 }
@@ -1386,7 +1815,9 @@ impl App {
                 });
                 if resp.clicked() {
                     select = Some(row.kind);
-                    if let (RowKind::Bus(item) | RowKind::Group(item), Some(p)) = (row.kind, resp.interact_pointer_pos()) {
+                    if let (RowKind::Bus(item) | RowKind::Group(item), Some(p)) =
+                        (row.kind, resp.interact_pointer_pos())
+                    {
                         if p.x < label.left() + 22.0 {
                             toggle = Some(item);
                         }
@@ -1405,7 +1836,13 @@ impl App {
         if let Some(t) = store.trigger() {
             draw_trigger(&painter.with_clip_rect(rect), plot, ruler, &self.view, t);
         }
-        draw_markers(&painter.with_clip_rect(rect), plot, ruler, &self.view, &self.markers);
+        draw_markers(
+            &painter.with_clip_rect(rect),
+            plot,
+            ruler,
+            &self.view,
+            &self.markers,
+        );
         // Yellow target on the edge a click would snap the marker to, with its timestamp.
         self.hover_edge = None;
         if self.snap && self.row_drag.is_none() && self.opts.dragging.is_none() {
@@ -1413,17 +1850,32 @@ impl App {
                 let s = self.view.sample_at((p.x - plot.left()) as f64);
                 if let Some((edge, idx)) = self.snap_target(&store, s, p.y, plot, &rows, row_h) {
                     self.hover_edge = Some(edge);
-                    let c = pos2(plot.left() + self.view.x_of(edge as f64) as f32, plot.top() - self.scroll_y + (idx as f32 + 0.5) * row_h);
+                    let c = pos2(
+                        plot.left() + self.view.x_of(edge as f64) as f32,
+                        plot.top() - self.scroll_y + (idx as f32 + 0.5) * row_h,
+                    );
                     plot_p.circle_stroke(c, 5.0, Stroke::new(1.5_f32, theme::SNAP));
                     let mut text = format_split((edge as f64 - origin) / rate, 1.0 / rate);
                     if let Some(m1) = self.markers.m1 {
                         let d = (edge as f64 - m1) / rate;
-                        text.push_str(&format!("   {}M1 {}", if d < 0.0 { "-" } else { "+" }, format_duration(d.abs())));
+                        text.push_str(&format!(
+                            "   {}M1 {}",
+                            if d < 0.0 { "-" } else { "+" },
+                            format_duration(d.abs())
+                        ));
                     }
                     let galley = plot_p.layout_no_wrap(text, FontId::monospace(11.0), theme::SNAP);
                     let size = galley.size() + vec2(8.0, 4.0);
-                    let x = if c.x + 10.0 + size.x > plot.right() { c.x - 10.0 - size.x } else { c.x + 10.0 };
-                    let y = if c.y - size.y - 4.0 < plot.top() { c.y + 6.0 } else { c.y - size.y - 4.0 };
+                    let x = if c.x + 10.0 + size.x > plot.right() {
+                        c.x - 10.0 - size.x
+                    } else {
+                        c.x + 10.0
+                    };
+                    let y = if c.y - size.y - 4.0 < plot.top() {
+                        c.y + 6.0
+                    } else {
+                        c.y - size.y - 4.0
+                    };
                     let tag = Rect::from_min_size(pos2(x, y), size);
                     plot_p.rect_filled(tag, 0.0, Color32::BLACK);
                     plot_p.rect_stroke(tag, 0.0, Stroke::new(1.0_f32, theme::SNAP));
@@ -1432,7 +1884,13 @@ impl App {
             }
         }
         if store.is_empty() {
-            painter.text(plot.center(), Align2::CENTER_CENTER, "No data.  Run (F5) to acquire.", FontId::monospace(13.0), theme::TEXT_DIM);
+            painter.text(
+                plot.center(),
+                Align2::CENTER_CENTER,
+                "No data.  Run (F5) to acquire.",
+                FontId::monospace(13.0),
+                theme::TEXT_DIM,
+            );
         }
     }
 
@@ -1440,147 +1898,209 @@ impl App {
 
     fn setup_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_setup;
-        egui::Window::new("Bus/Signal Setup").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-            let n = self.layout.names.len();
-            let mut changed = false;
-            ui.label(RichText::new("Signals").color(theme::TEXT_DIM));
-            for ch in 0..n {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{ch:>2}"));
-                    changed |= color_button(ui, &mut self.layout.colors[ch]);
-                    let name = egui::TextEdit::singleline(&mut self.layout.names[ch]);
-                    changed |= ui.add_sized([130.0, 18.0], name).changed();
-                    changed |= ui.checkbox(&mut self.layout.visible[ch], "show").changed();
-                });
-            }
-            if !self.decoders.is_empty() {
-                ui.separator();
-                ui.label(RichText::new("Decoders").color(theme::TEXT_DIM));
-                for e in &self.decoders {
-                    let id = e.handle.id.0;
-                    let mut shown = !self.layout.hidden_decoders.contains(&id);
-                    if ui.checkbox(&mut shown, format!("show {}", e.name)).changed() {
-                        self.layout.set_decoder_shown(id, shown);
-                        changed = true;
+        egui::Window::new("Bus/Signal Setup")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                let n = self.layout.names.len();
+                let mut changed = false;
+                ui.label(RichText::new("Signals").color(theme::TEXT_DIM));
+                for ch in 0..n {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{ch:>2}"));
+                        changed |= color_button(ui, &mut self.layout.colors[ch]);
+                        let name = egui::TextEdit::singleline(&mut self.layout.names[ch]);
+                        changed |= ui.add_sized([130.0, 18.0], name).changed();
+                        changed |= ui.checkbox(&mut self.layout.visible[ch], "show").changed();
+                    });
+                }
+                if !self.decoders.is_empty() {
+                    ui.separator();
+                    ui.label(RichText::new("Decoders").color(theme::TEXT_DIM));
+                    for e in &self.decoders {
+                        let id = e.handle.id.0;
+                        let mut shown = !self.layout.hidden_decoders.contains(&id);
+                        if ui
+                            .checkbox(&mut shown, format!("show {}", e.name))
+                            .changed()
+                        {
+                            self.layout.set_decoder_shown(id, shown);
+                            changed = true;
+                        }
                     }
                 }
-            }
-            ui.separator();
-            ui.label(RichText::new("Buses").color(theme::TEXT_DIM));
-            let mut remove = None;
-            for (i, item) in self.layout.items.iter_mut().enumerate() {
-                if let Item::Bus(b) = item {
-                    ui.horizontal(|ui| {
-                        changed |= color_button(ui, &mut b.color);
-                        changed |= ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(90.0)).changed();
-                        ui.label(crate::rows::bus_range(&b.members));
-                        changed |= ui.checkbox(&mut b.shown, "show").changed();
-                        egui::ComboBox::from_id_salt(("radix", i)).selected_text(b.radix.label()).show_ui(ui, |ui| {
-                            for r in Radix::ALL {
-                                changed |= ui.selectable_value(&mut b.radix, r, r.label()).changed();
+                ui.separator();
+                ui.label(RichText::new("Buses").color(theme::TEXT_DIM));
+                let mut remove = None;
+                for (i, item) in self.layout.items.iter_mut().enumerate() {
+                    if let Item::Bus(b) = item {
+                        ui.horizontal(|ui| {
+                            changed |= color_button(ui, &mut b.color);
+                            changed |= ui
+                                .add(egui::TextEdit::singleline(&mut b.name).desired_width(90.0))
+                                .changed();
+                            ui.label(crate::rows::bus_range(&b.members));
+                            changed |= ui.checkbox(&mut b.shown, "show").changed();
+                            egui::ComboBox::from_id_salt(("radix", i))
+                                .selected_text(b.radix.label())
+                                .show_ui(ui, |ui| {
+                                    for r in Radix::ALL {
+                                        changed |= ui
+                                            .selectable_value(&mut b.radix, r, r.label())
+                                            .changed();
+                                    }
+                                });
+                            if ui.button("Remove").clicked() {
+                                remove = Some(i);
                             }
                         });
-                        if ui.button("Remove").clicked() {
-                            remove = Some(i);
-                        }
-                    });
-                } else if let Item::Group(g) = item {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new("group").color(theme::TEXT_DIM));
-                        changed |= ui.add(egui::TextEdit::singleline(&mut g.name).desired_width(90.0)).changed();
-                        ui.label(crate::rows::bus_range(&g.members));
-                        changed |= ui.checkbox(&mut g.shown, "show").changed();
-                        if ui.button("Remove").clicked() {
-                            remove = Some(i);
-                        }
-                    });
+                    } else if let Item::Group(g) = item {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("group").color(theme::TEXT_DIM));
+                            changed |= ui
+                                .add(egui::TextEdit::singleline(&mut g.name).desired_width(90.0))
+                                .changed();
+                            ui.label(crate::rows::bus_range(&g.members));
+                            changed |= ui.checkbox(&mut g.shown, "show").changed();
+                            if ui.button("Remove").clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    }
                 }
-            }
-            if let Some(i) = remove {
-                self.layout.remove_bus(i);
-                self.selected = None;
-                changed = true;
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.new_bus.name).hint_text("name").desired_width(80.0));
-                ui.add(egui::TextEdit::singleline(&mut self.new_bus.channels).hint_text("e.g. 15-8").desired_width(80.0));
-                let radix = self.new_bus.radix.get_or_insert(Radix::Hex);
-                egui::ComboBox::from_id_salt("new_radix").selected_text(radix.label()).show_ui(ui, |ui| {
-                    for r in Radix::ALL {
-                        ui.selectable_value(radix, r, r.label());
+                if let Some(i) = remove {
+                    self.layout.remove_bus(i);
+                    self.selected = None;
+                    changed = true;
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_bus.name)
+                            .hint_text("name")
+                            .desired_width(80.0),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_bus.channels)
+                            .hint_text("e.g. 15-8")
+                            .desired_width(80.0),
+                    );
+                    let radix = self.new_bus.radix.get_or_insert(Radix::Hex);
+                    egui::ComboBox::from_id_salt("new_radix")
+                        .selected_text(radix.label())
+                        .show_ui(ui, |ui| {
+                            for r in Radix::ALL {
+                                ui.selectable_value(radix, r, r.label());
+                            }
+                        });
+                    if ui
+                        .button("Add group")
+                        .on_hover_text("A collapsible folder of signals, without a combined value")
+                        .clicked()
+                    {
+                        match parse_channels(&self.new_bus.channels, n)
+                            .and_then(|m| self.layout.add_group(&self.new_bus.name, m))
+                        {
+                            Ok(()) => {
+                                self.new_bus = NewBus::default();
+                                self.selected = None;
+                                changed = true;
+                            }
+                            Err(e) => self.new_bus.error = Some(e),
+                        }
+                    }
+                    if ui.button("Add bus").clicked() {
+                        let radix = self.new_bus.radix.unwrap_or(Radix::Hex);
+                        let res = parse_channels(&self.new_bus.channels, n)
+                            .and_then(|m| self.layout.add_bus(&self.new_bus.name, m, radix));
+                        match res {
+                            Ok(()) => {
+                                self.new_bus = NewBus::default();
+                                self.selected = None;
+                                changed = true;
+                            }
+                            Err(e) => self.new_bus.error = Some(e),
+                        }
                     }
                 });
-                if ui.button("Add group").on_hover_text("A collapsible folder of signals, without a combined value").clicked() {
-                    match parse_channels(&self.new_bus.channels, n).and_then(|m| self.layout.add_group(&self.new_bus.name, m)) {
-                        Ok(()) => {
-                            self.new_bus = NewBus::default();
-                            self.selected = None;
-                            changed = true;
-                        }
-                        Err(e) => self.new_bus.error = Some(e),
-                    }
+                if let Some(e) = &self.new_bus.error {
+                    ui.colored_label(theme::STOP, e);
                 }
-                if ui.button("Add bus").clicked() {
-                    let radix = self.new_bus.radix.unwrap_or(Radix::Hex);
-                    let res = parse_channels(&self.new_bus.channels, n)
-                        .and_then(|m| self.layout.add_bus(&self.new_bus.name, m, radix));
-                    match res {
-                        Ok(()) => {
-                            self.new_bus = NewBus::default();
-                            self.selected = None;
-                            changed = true;
+                ui.separator();
+                ui.label(RichText::new("Row order").color(theme::TEXT_DIM));
+                let mut mv: Option<(usize, i32)> = None;
+                for (i, item) in self.layout.items.iter().enumerate() {
+                    let name = match item {
+                        Item::Signal(ch) => self
+                            .layout
+                            .names
+                            .get(*ch as usize)
+                            .cloned()
+                            .unwrap_or_default(),
+                        Item::Bus(b) => format!("{} (bus)", b.name),
+                        Item::Group(g) => format!("{} (group)", g.name),
+                        Item::Decoder(id) => format!(
+                            "{} (decoder)",
+                            self.entry(*id).map(|e| e.name.as_str()).unwrap_or("?")
+                        ),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.add_sized([150.0, 16.0], egui::Label::new(name));
+                        if ui.small_button("Up").clicked() {
+                            mv = Some((i, -1));
                         }
-                        Err(e) => self.new_bus.error = Some(e),
-                    }
+                        if ui.small_button("Down").clicked() {
+                            mv = Some((i, 1));
+                        }
+                    });
+                }
+                if let Some((i, d)) = mv {
+                    self.layout.move_item(i, d);
+                    changed = true;
+                }
+                if changed {
+                    self.layout_touched = true;
                 }
             });
-            if let Some(e) = &self.new_bus.error {
-                ui.colored_label(theme::STOP, e);
-            }
-            ui.separator();
-            ui.label(RichText::new("Row order").color(theme::TEXT_DIM));
-            let mut mv: Option<(usize, i32)> = None;
-            for (i, item) in self.layout.items.iter().enumerate() {
-                let name = match item {
-                    Item::Signal(ch) => self.layout.names.get(*ch as usize).cloned().unwrap_or_default(),
-                    Item::Bus(b) => format!("{} (bus)", b.name),
-                    Item::Group(g) => format!("{} (group)", g.name),
-                    Item::Decoder(id) => format!("{} (decoder)", self.entry(*id).map(|e| e.name.as_str()).unwrap_or("?")),
-                };
-                ui.horizontal(|ui| {
-                    ui.add_sized([150.0, 16.0], egui::Label::new(name));
-                    if ui.small_button("Up").clicked() {
-                        mv = Some((i, -1));
-                    }
-                    if ui.small_button("Down").clicked() {
-                        mv = Some((i, 1));
-                    }
-                });
-            }
-            if let Some((i, d)) = mv {
-                self.layout.move_item(i, d);
-                changed = true;
-            }
-            if changed {
-                self.layout_touched = true;
-            }
-        });
         self.show_setup = open;
     }
 
     /// Drag and drop of rows in the gutter: a yellow line shows the gap the row would land in, a
     /// highlighted group header means "into the group". Released on a valid target, the row moves.
     #[allow(clippy::too_many_arguments)]
-    fn row_drag_ui(&mut self, ui: &egui::Ui, painter: &egui::Painter, rect: Rect, plot: Rect, rows: &[Row], row_h: f32, pointer: Option<egui::Pos2>) {
-        let demo = self.opts.dragging.and_then(|i| rows.get(i)).and_then(|r| self.layout.mover_of(r));
-        let Some(m) = self.row_drag.or(demo) else { return };
+    fn row_drag_ui(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        rect: Rect,
+        plot: Rect,
+        rows: &[Row],
+        row_h: f32,
+        pointer: Option<egui::Pos2>,
+    ) {
+        let demo = self
+            .opts
+            .dragging
+            .and_then(|i| rows.get(i))
+            .and_then(|r| self.layout.mover_of(r));
+        let Some(m) = self.row_drag.or(demo) else {
+            return;
+        };
         let Some(p) = pointer else { return };
-        let (released, escape) = ui.input(|i| (i.pointer.any_released() || !i.pointer.primary_down(), i.key_pressed(Key::Escape)));
+        let (released, escape) = ui.input(|i| {
+            (
+                i.pointer.any_released() || !i.pointer.primary_down(),
+                i.key_pressed(Key::Escape),
+            )
+        });
         let rel = (p.y - plot.top() + self.scroll_y) / row_h;
         let idx = rel.floor().max(0.0) as usize;
         let frac = rel - rel.floor();
-        let onto = rows.get(idx).filter(|_| rel >= 0.0 && (0.25..0.75).contains(&frac)).and_then(|r| self.layout.drop_onto(r, m).map(|d| (d, idx)));
+        let onto = rows
+            .get(idx)
+            .filter(|_| rel >= 0.0 && (0.25..0.75).contains(&frac))
+            .and_then(|r| self.layout.drop_onto(r, m).map(|d| (d, idx)));
         let (dest, mark) = match onto {
             Some((d, row)) => (Some(d), Err(row)),
             None => {
@@ -1589,17 +2109,25 @@ impl App {
             }
         };
         // The row being carried, as a small tag at the pointer.
-        let label = rows.iter().find(|r| self.layout.mover_of(r) == Some(m)).map(|r| self.row_label(r)).unwrap_or_default();
+        let label = rows
+            .iter()
+            .find(|r| self.layout.mover_of(r) == Some(m))
+            .map(|r| self.row_label(r))
+            .unwrap_or_default();
         let top = |row: usize| plot.top() - self.scroll_y + row as f32 * row_h;
         let clip = painter.with_clip_rect(Rect::from_min_max(rect.left_top(), rect.right_bottom()));
         if let (Some(_), true) = (dest, p.y >= plot.top() - 4.0) {
             match mark {
                 Ok(gap) => {
                     let y = top(gap).clamp(plot.top(), plot.bottom());
-                    clip.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(2.0_f32, theme::SNAP));
+                    clip.line_segment(
+                        [pos2(rect.left(), y), pos2(rect.right(), y)],
+                        Stroke::new(2.0_f32, theme::SNAP),
+                    );
                 }
                 Err(row) => {
-                    let r = Rect::from_min_size(pos2(rect.left(), top(row)), vec2(rect.width(), row_h));
+                    let r =
+                        Rect::from_min_size(pos2(rect.left(), top(row)), vec2(rect.width(), row_h));
                     clip.rect_stroke(r.shrink(1.0), 0.0, Stroke::new(2.0_f32, theme::SNAP));
                 }
             }
@@ -1607,7 +2135,8 @@ impl App {
             ui.ctx().set_cursor_icon(CursorIcon::NotAllowed);
         }
         let tag = clip.layout_no_wrap(label, FontId::monospace(12.0), theme::TEXT);
-        let tag_r = Rect::from_min_size(p + vec2(12.0, -tag.size().y / 2.0), tag.size()).expand2(vec2(5.0, 2.0));
+        let tag_r = Rect::from_min_size(p + vec2(12.0, -tag.size().y / 2.0), tag.size())
+            .expand2(vec2(5.0, 2.0));
         clip.rect_filled(tag_r, 0.0, theme::SELECT);
         clip.rect_stroke(tag_r, 0.0, Stroke::new(1.0_f32, theme::SNAP));
         clip.galley(tag_r.min + vec2(5.0, 2.0), tag, theme::TEXT);
@@ -1633,9 +2162,22 @@ impl App {
         let names = self.layout.names.clone();
         let n = self.channels_n as usize;
         let (rate, continuous) = (self.rate, self.continuous);
-        egui::Window::new("Trigger").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-            crate::trigger_ui::contents(ui, &mut self.trigger, &mut self.trigger_probe, &mut self.memory_mib, &names, n, rate, continuous);
-        });
+        egui::Window::new("Trigger")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                crate::trigger_ui::contents(
+                    ui,
+                    &mut self.trigger,
+                    &mut self.trigger_probe,
+                    &mut self.memory_mib,
+                    &names,
+                    n,
+                    rate,
+                    continuous,
+                );
+            });
         self.show_trigger = open;
         if let Some(rx) = self.trigger_probe.request.take() {
             self.trigger_probe.result = Some((rx, self.detect_baud(rx)));
@@ -1655,7 +2197,10 @@ impl App {
         }
         let all = store.range();
         let range = match (self.markers.m1, self.markers.m2) {
-            (Some(a), Some(b)) => (a.min(b).max(all.start as f64).floor() as u64)..(a.max(b).min(all.end as f64).ceil() as u64),
+            (Some(a), Some(b)) => {
+                (a.min(b).max(all.start as f64).floor() as u64)
+                    ..(a.max(b).min(all.end as f64).ceil() as u64)
+            }
             _ => all,
         };
         let mut edges: Vec<u64> = Vec::new();
@@ -1678,7 +2223,8 @@ impl App {
             .default_size([940.0, 660.0])
             .min_size([640.0, 420.0])
             .show(ctx, |ui| {
-                let actions = decode_ui::setup_ui(ui, &mut self.setup, &mut self.decoders, &names, end);
+                let actions =
+                    decode_ui::setup_ui(ui, &mut self.setup, &mut self.decoders, &names, end);
                 for a in actions {
                     match a {
                         decode_ui::Action::Add(kind) => {
@@ -1708,42 +2254,65 @@ impl App {
             (s.sample_rate(), self.origin_of(&s))
         };
         let selected = self.selected_ann;
-        if let Some((sel, a, idx)) = decode_ui::table_ui(ui, &mut self.table, &self.decoders, rate, origin, selected) {
+        if let Some((sel, a, idx)) =
+            decode_ui::table_ui(ui, &mut self.table, &self.decoders, rate, origin, selected)
+        {
             self.select_annotation(sel.id, sel.lane, a, idx, true, true);
         }
     }
 
     fn keys_window(&mut self, ctx: &egui::Context) {
-        egui::Window::new("Mouse and keys").open(&mut self.show_keys).collapsible(false).resizable(false).show(ctx, |ui| {
-            egui::Grid::new("keys").num_columns(2).spacing([16.0, 3.0]).show(ui, |ui| {
-                for (k, d) in [
-                    ("Wheel", "zoom around the pointer"),
-                    ("Shift+wheel, drag", "pan"),
-                    ("Click / right-click", "place M1 / M2 (snapped to an edge)"),
-                    ("Drag a marker", "move it (also from the ruler)"),
-                    ("Double-click", "fit the whole capture"),
-                    ("Click overview", "jump to that part of the capture"),
-                    ("Click +/- on a bus", "expand to its signals"),
-                    ("Right-click a row", "trace color"),
-                    ("F5 / F8", "run / stop"),
-                    ("Ctrl+O / Ctrl+S", "open / save a capture"),
-                    ("View > Measurements", "frequency, duty and pulse widths per channel"),
-                    ("Home", "fit"),
-                    ("Ctrl+Up / Down", "taller / shorter rows"),
-                    ("Click a decoded item", "select it, mark its span, show it in the table"),
-                    ("Ctrl+F, F3 / Shift+F3", "search the table, next / previous row"),
-                ] {
-                    ui.label(RichText::new(k).color(theme::TEXT_DIM));
-                    ui.label(d);
-                    ui.end_row();
-                }
+        egui::Window::new("Mouse and keys")
+            .open(&mut self.show_keys)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::Grid::new("keys")
+                    .num_columns(2)
+                    .spacing([16.0, 3.0])
+                    .show(ui, |ui| {
+                        for (k, d) in [
+                            ("Wheel", "zoom around the pointer"),
+                            ("Shift+wheel, drag", "pan"),
+                            ("Click / right-click", "place M1 / M2 (snapped to an edge)"),
+                            ("Drag a marker", "move it (also from the ruler)"),
+                            ("Double-click", "fit the whole capture"),
+                            ("Click overview", "jump to that part of the capture"),
+                            ("Click +/- on a bus", "expand to its signals"),
+                            ("Right-click a row", "trace color"),
+                            ("F5 / F8", "run / stop"),
+                            ("Ctrl+O / Ctrl+S", "open / save a capture"),
+                            (
+                                "View > Measurements",
+                                "frequency, duty and pulse widths per channel",
+                            ),
+                            ("Home", "fit"),
+                            ("Ctrl+Up / Down", "taller / shorter rows"),
+                            (
+                                "Click a decoded item",
+                                "select it, mark its span, show it in the table",
+                            ),
+                            (
+                                "Ctrl+F, F3 / Shift+F3",
+                                "search the table, next / previous row",
+                            ),
+                        ] {
+                            ui.label(RichText::new(k).color(theme::TEXT_DIM));
+                            ui.label(d);
+                            ui.end_row();
+                        }
+                    });
             });
-        });
     }
 
     fn handle_demo_and_screenshot(&mut self, ctx: &egui::Context) {
         self.show_measure |= self.opts.measure_window;
-        if self.opts.detect_baud && !self.detect_pressed && self.autostarted && !self.running() && self.last_result.is_some() {
+        if self.opts.detect_baud
+            && !self.detect_pressed
+            && self.autostarted
+            && !self.running()
+            && self.last_result.is_some()
+        {
             self.detect_pressed = true;
             self.setup.probe.request = Some(0);
         }
@@ -1753,7 +2322,12 @@ impl App {
         }
         if let Some(p) = self.opts.save_capture.clone() {
             ctx.request_repaint_after(Duration::from_millis(100));
-            if !self.save_done && self.autostarted && !self.running() && self.last_result.is_some() && !self.engine.busy() {
+            if !self.save_done
+                && self.autostarted
+                && !self.running()
+                && self.last_result.is_some()
+                && !self.engine.busy()
+            {
                 self.save_done = true;
                 self.file_chosen(files::Purpose::SaveCapture, p.into());
             }
@@ -1855,29 +2429,68 @@ impl App {
             if self.opts.groups && self.layout.names.len() == 16 {
                 let _ = self.layout.add_group("SPI", vec![1, 2, 3]);
                 let _ = self.layout.add_group("I2C", vec![4, 5]);
-                if let Some(i) = self.layout.items.iter().position(|it| matches!(it, Item::Group(g) if g.name == "I2C")) {
+                if let Some(i) = self
+                    .layout
+                    .items
+                    .iter()
+                    .position(|it| matches!(it, Item::Group(g) if g.name == "I2C"))
+                {
                     self.layout.toggle_expanded(i); // show one group collapsed
                 }
                 self.layout_touched = true;
             }
             if let Some(name) = self.opts.decoder_group.clone() {
-                let gi = self.layout.items.iter().position(|it| matches!(it, Item::Group(g) if g.name == name));
+                let gi = self
+                    .layout
+                    .items
+                    .iter()
+                    .position(|it| matches!(it, Item::Group(g) if g.name == name));
                 if let Some(i) = gi {
                     if let Some(e) = self.decoders.first() {
-                        self.layout.move_to(Mover::Decoder(e.handle.id.0), Dest::Group { item: i, pos: usize::MAX });
+                        self.layout.move_to(
+                            Mover::Decoder(e.handle.id.0),
+                            Dest::Group {
+                                item: i,
+                                pos: usize::MAX,
+                            },
+                        );
                     }
-                    if let Some(b) = self.layout.items.iter().position(|it| matches!(it, Item::Bus(_))) {
-                        self.layout.move_to(Mover::Bus(b), Dest::Group { item: i, pos: usize::MAX }); // screenshots: a bus in the group
+                    if let Some(b) = self
+                        .layout
+                        .items
+                        .iter()
+                        .position(|it| matches!(it, Item::Bus(_)))
+                    {
+                        self.layout.move_to(
+                            Mover::Bus(b),
+                            Dest::Group {
+                                item: i,
+                                pos: usize::MAX,
+                            },
+                        ); // screenshots: a bus in the group
                     }
                 }
             }
         }
         if let (Some(n), false, false) = (self.opts.goto, self.goto_done, self.engine.busy()) {
-            if self.autostarted && !self.running() && self.last_result.is_some() && !self.decoders.is_empty() {
+            if self.autostarted
+                && !self.running()
+                && self.last_result.is_some()
+                && !self.decoders.is_empty()
+            {
                 let found = {
                     let anns = self.decoders[0].handle.anns.read();
-                    let lane = self.opts.table_lane.unwrap_or_else(|| self.decoders[0].handle.lane_used.iter().position(|u| *u).unwrap_or(0));
-                    anns.lanes.get(lane).and_then(|l| l.get(n).map(|a| (lane, *a)))
+                    let lane = self.opts.table_lane.unwrap_or_else(|| {
+                        self.decoders[0]
+                            .handle
+                            .lane_used
+                            .iter()
+                            .position(|u| *u)
+                            .unwrap_or(0)
+                    });
+                    anns.lanes
+                        .get(lane)
+                        .and_then(|l| l.get(n).map(|a| (lane, *a)))
                 };
                 if let Some((lane, a)) = found {
                     self.goto_done = true;
@@ -1893,7 +2506,10 @@ impl App {
                 self.follow = false;
             }
             if let Some((a, b)) = self.opts.markers {
-                self.markers = Markers { m1: Some(a), m2: Some(b) };
+                self.markers = Markers {
+                    m1: Some(a),
+                    m2: Some(b),
+                };
             }
             if self.opts.expand {
                 for it in &mut self.layout.items {
@@ -1943,7 +2559,12 @@ impl eframe::App for App {
         self.poll_files(ctx);
         self.autosave(false);
         self.update_title(ctx);
-        let (open, save) = ctx.input(|i| (i.modifiers.command && i.key_pressed(Key::O), i.modifiers.command && i.key_pressed(Key::S)));
+        let (open, save) = ctx.input(|i| {
+            (
+                i.modifiers.command && i.key_pressed(Key::O),
+                i.modifiers.command && i.key_pressed(Key::S),
+            )
+        });
         if open && !self.running() && !self.busy_files() {
             self.ask_file(files::Purpose::OpenCapture);
         }
@@ -1951,11 +2572,26 @@ impl eframe::App for App {
             self.save_capture();
         }
 
-        let (f5, f8, home) = ctx.input(|i| (i.key_pressed(Key::F5), i.key_pressed(Key::F8), i.key_pressed(Key::Home)));
-        let (taller, shorter) = ctx.input(|i| {
-            (i.modifiers.command && i.key_pressed(Key::ArrowUp), i.modifiers.command && i.key_pressed(Key::ArrowDown))
+        let (f5, f8, home) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::F5),
+                i.key_pressed(Key::F8),
+                i.key_pressed(Key::Home),
+            )
         });
-        let (find, f3, shift_held) = ctx.input(|i| (i.modifiers.command && i.key_pressed(Key::F), i.key_pressed(Key::F3), i.modifiers.shift));
+        let (taller, shorter) = ctx.input(|i| {
+            (
+                i.modifiers.command && i.key_pressed(Key::ArrowUp),
+                i.modifiers.command && i.key_pressed(Key::ArrowDown),
+            )
+        });
+        let (find, f3, shift_held) = ctx.input(|i| {
+            (
+                i.modifiers.command && i.key_pressed(Key::F),
+                i.key_pressed(Key::F3),
+                i.modifiers.shift,
+            )
+        });
         if find {
             self.show_table = true;
             self.table.focus_search = true;
@@ -1980,11 +2616,24 @@ impl eframe::App for App {
             self.fit();
         }
 
-        let bar = |fill| egui::Frame::none().fill(fill).inner_margin(Margin::symmetric(6.0, 3.0));
-        egui::TopBottomPanel::top("menu").frame(bar(theme::CHROME_DARK)).show(ctx, |ui| self.menu_bar(ui));
-        egui::TopBottomPanel::top("run").frame(bar(theme::CHROME)).show(ctx, |ui| self.run_bar(ui));
-        egui::TopBottomPanel::top("markers").frame(bar(theme::CHROME_DARK)).show(ctx, |ui| self.marker_bar(ui));
-        egui::TopBottomPanel::bottom("status").exact_height(22.0).frame(bar(theme::CHROME_DARK)).show(ctx, |ui| self.status_bar(ui));
+        let bar = |fill| {
+            egui::Frame::none()
+                .fill(fill)
+                .inner_margin(Margin::symmetric(6.0, 3.0))
+        };
+        egui::TopBottomPanel::top("menu")
+            .frame(bar(theme::CHROME_DARK))
+            .show(ctx, |ui| self.menu_bar(ui));
+        egui::TopBottomPanel::top("run")
+            .frame(bar(theme::CHROME))
+            .show(ctx, |ui| self.run_bar(ui));
+        egui::TopBottomPanel::top("markers")
+            .frame(bar(theme::CHROME_DARK))
+            .show(ctx, |ui| self.marker_bar(ui));
+        egui::TopBottomPanel::bottom("status")
+            .exact_height(22.0)
+            .frame(bar(theme::CHROME_DARK))
+            .show(ctx, |ui| self.status_bar(ui));
         egui::TopBottomPanel::bottom("overview")
             .exact_height(OVERVIEW_H)
             .frame(egui::Frame::none().fill(theme::CHROME))
@@ -1993,10 +2642,16 @@ impl eframe::App for App {
             egui::TopBottomPanel::bottom("table")
                 .resizable(true)
                 .default_height(190.0)
-                .frame(egui::Frame::none().fill(theme::CHROME_DARK).inner_margin(Margin::symmetric(6.0, 3.0)))
+                .frame(
+                    egui::Frame::none()
+                        .fill(theme::CHROME_DARK)
+                        .inner_margin(Margin::symmetric(6.0, 3.0)),
+                )
                 .show(ctx, |ui| self.table_panel(ui));
         }
-        egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| self.waveform_panel(ui));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| self.waveform_panel(ui));
 
         self.setup_window(ctx);
         self.decoders_window(ctx);
@@ -2006,7 +2661,18 @@ impl eframe::App for App {
             let guard = store.read();
             let origin = self.origin_of(&guard);
             let running = self.running();
-            crate::measure_ui::window(ctx, &mut self.show_measure, &mut self.measure, &guard, &self.layout, &self.view, self.plot_width, &self.markers, origin, running);
+            crate::measure_ui::window(
+                ctx,
+                &mut self.show_measure,
+                &mut self.measure,
+                &guard,
+                &self.layout,
+                &self.view,
+                self.plot_width,
+                &self.markers,
+                origin,
+                running,
+            );
         }
         self.keys_window(ctx);
         if self.opts.color_demo {

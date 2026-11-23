@@ -4,9 +4,9 @@ use crate::markers::Markers;
 use crate::rows::{bus_value, format_bus, Radix};
 use crate::theme;
 use crate::view::{format_time, minor_ticks, ticks, View};
-use egui::{pos2, Align2, Color32, FontId, Painter, Rect, Shape, Stroke};
 use bf_core::{CaptureStore, Column};
 use bf_decode::{flag, telegram_chars, telegram_text, Annotation, Format, Kind};
+use egui::{pos2, Align2, Color32, FontId, Painter, Rect, Shape, Stroke};
 
 /// Space above and below the trace inside a row: grows with the row height.
 fn trace_pad(row: Rect) -> f32 {
@@ -31,10 +31,19 @@ fn visible_range(store: &CaptureStore, view: &View, width: f64) -> Option<(u64, 
 /// Zoomed in far enough that every edge gets its own pixel, the exact edges are drawn. Otherwise the
 /// per-pixel summary is used: flat line, single edge, or a filled bar where the signal toggles
 /// several times inside one pixel.
-pub fn draw_signal(painter: &Painter, store: &CaptureStore, ch: u8, rect: Rect, view: &View, color: Color32) {
+pub fn draw_signal(
+    painter: &Painter,
+    store: &CaptureStore,
+    ch: u8,
+    rect: Rect,
+    view: &View,
+    color: Color32,
+) {
     let n = rect.width().floor() as usize;
     let width = rect.width() as f64;
-    let Some((r0, r1)) = visible_range(store, view, width) else { return };
+    let Some((r0, r1)) = visible_range(store, view, width) else {
+        return;
+    };
     if n == 0 {
         return;
     }
@@ -45,8 +54,14 @@ pub fn draw_signal(painter: &Painter, store: &CaptureStore, ch: u8, rect: Rect, 
     let stroke = Stroke::new(1.0_f32, color);
 
     if store.count_toggles(ch, r0..r1) <= 3 * n as u64 {
-        let Some(edges) = store.edges(ch, r0..r1, usize::MAX) else { return };
-        let before = if r0 > store.first_sample() { store.level(ch, r0 - 1) } else { store.level(ch, r0) };
+        let Some(edges) = store.edges(ch, r0..r1, usize::MAX) else {
+            return;
+        };
+        let before = if r0 > store.first_sample() {
+            store.level(ch, r0 - 1)
+        } else {
+            store.level(ch, r0)
+        };
         let mut level = before.unwrap_or(false);
         let mut pts = Vec::with_capacity(edges.len() * 2 + 2);
         pts.push(pos2(x_of(r0 as f64).max(rect.left() - 1.0), y(level)));
@@ -94,7 +109,11 @@ pub fn draw_signal(painter: &Painter, store: &CaptureStore, ch: u8, rect: Rect, 
             }
             _ => {
                 flush(&mut pts);
-                painter.rect_filled(Rect::from_min_max(pos2(x, top), pos2(x + 1.0, bottom)), 0.0, color.gamma_multiply(0.45));
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(x, top), pos2(x + 1.0, bottom)),
+                    0.0,
+                    color.gamma_multiply(0.45),
+                );
                 pts.push(pos2(x + 1.0, y(c.after)));
             }
         }
@@ -104,21 +123,38 @@ pub fn draw_signal(painter: &Painter, store: &CaptureStore, ch: u8, rect: Rect, 
 
 /// Draw a bus as value "hexagons" between its transitions. Too many transitions for the pixels
 /// available are shown as a shaded band.
-pub fn draw_bus(painter: &Painter, store: &CaptureStore, members: &[u8], radix: Radix, rect: Rect, view: &View, color: Color32) {
+pub fn draw_bus(
+    painter: &Painter,
+    store: &CaptureStore,
+    members: &[u8],
+    radix: Radix,
+    rect: Rect,
+    view: &View,
+    color: Color32,
+) {
     let width = rect.width() as f64;
-    let Some((r0, r1)) = visible_range(store, view, width) else { return };
+    let Some((r0, r1)) = visible_range(store, view, width) else {
+        return;
+    };
     let pad = trace_pad(rect);
     let (top, bottom) = (rect.top() + pad, rect.bottom() - pad);
     let mid = (top + bottom) / 2.0;
     let x_of = |s: f64| rect.left() + view.x_of(s) as f32;
     let stroke = Stroke::new(1.0_f32, color);
 
-    let raw: u64 = members.iter().map(|&c| store.count_toggles(c, r0..r1)).sum();
+    let raw: u64 = members
+        .iter()
+        .map(|&c| store.count_toggles(c, r0..r1))
+        .sum();
     if raw > width as u64 {
         // Dense: filled band with the bus outline.
         let x0 = x_of(r0 as f64).max(rect.left());
         let x1 = x_of(r1 as f64).min(rect.right());
-        painter.rect_filled(Rect::from_min_max(pos2(x0, top), pos2(x1, bottom)), 0.0, color.gamma_multiply(0.3));
+        painter.rect_filled(
+            Rect::from_min_max(pos2(x0, top), pos2(x1, bottom)),
+            0.0,
+            color.gamma_multiply(0.3),
+        );
         painter.line_segment([pos2(x0, top), pos2(x1, top)], stroke);
         painter.line_segment([pos2(x0, bottom), pos2(x1, bottom)], stroke);
         return;
@@ -156,10 +192,18 @@ pub fn draw_bus(painter: &Painter, store: &CaptureStore, members: &[u8], radix: 
         let (vx0, vx1) = (x0.max(rect.left()), x1.min(rect.right()));
         if vx1 - vx0 > 18.0 {
             let value = bus_value(store.state_at(s).unwrap_or(0), members);
-            let galley = painter.layout_no_wrap(format_bus(value, members.len(), radix), font.clone(), color);
+            let galley = painter.layout_no_wrap(
+                format_bus(value, members.len(), radix),
+                font.clone(),
+                color,
+            );
             let size = galley.size();
             if size.x + 8.0 <= vx1 - vx0 {
-                painter.galley(pos2((vx0 + vx1) / 2.0 - size.x / 2.0, mid - size.y / 2.0), galley, color);
+                painter.galley(
+                    pos2((vx0 + vx1) / 2.0 - size.x / 2.0, mid - size.y / 2.0),
+                    galley,
+                    color,
+                );
             }
         }
     }
@@ -169,10 +213,19 @@ pub fn draw_bus(painter: &Painter, store: &CaptureStore, members: &[u8], radix: 
 pub fn draw_ruler(painter: &Painter, rect: Rect, view: &View, rate: f64, origin: f64) {
     let width = rect.width() as f64;
     let (step, major) = ticks(view, width, rate, origin);
-    painter.line_segment([pos2(rect.left(), rect.bottom()), pos2(rect.right(), rect.bottom())], Stroke::new(1.0_f32, theme::GRID_MINOR));
+    painter.line_segment(
+        [
+            pos2(rect.left(), rect.bottom()),
+            pos2(rect.right(), rect.bottom()),
+        ],
+        Stroke::new(1.0_f32, theme::GRID_MINOR),
+    );
     for s in minor_ticks(view, width, rate, origin) {
         let x = rect.left() + view.x_of(s as f64) as f32;
-        painter.line_segment([pos2(x, rect.bottom() - 3.0), pos2(x, rect.bottom())], Stroke::new(1.0_f32, theme::GRID_MINOR));
+        painter.line_segment(
+            [pos2(x, rect.bottom() - 3.0), pos2(x, rect.bottom())],
+            Stroke::new(1.0_f32, theme::GRID_MINOR),
+        );
     }
     let font = FontId::monospace(11.0);
     for (s, t) in major {
@@ -180,7 +233,10 @@ pub fn draw_ruler(painter: &Painter, rect: Rect, view: &View, rate: f64, origin:
         if x < rect.left() || x > rect.right() {
             continue;
         }
-        painter.line_segment([pos2(x, rect.bottom() - 7.0), pos2(x, rect.bottom())], Stroke::new(1.0_f32, theme::TEXT));
+        painter.line_segment(
+            [pos2(x, rect.bottom() - 7.0), pos2(x, rect.bottom())],
+            Stroke::new(1.0_f32, theme::TEXT),
+        );
         painter.text(
             pos2(x + 3.0, rect.top() + 2.0),
             Align2::LEFT_TOP,
@@ -197,7 +253,12 @@ pub fn draw_grid(painter: &Painter, rect: Rect, view: &View, rate: f64, origin: 
     for (s, _) in major {
         let x = rect.left() + view.x_of(s as f64) as f32;
         if x >= rect.left() && x <= rect.right() {
-            painter.extend(Shape::dashed_line(&[pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0_f32, theme::GRID), 1.0, 3.0));
+            painter.extend(Shape::dashed_line(
+                &[pos2(x, rect.top()), pos2(x, rect.bottom())],
+                Stroke::new(1.0_f32, theme::GRID),
+                1.0,
+                3.0,
+            ));
         }
     }
 }
@@ -210,10 +271,24 @@ pub fn draw_markers(painter: &Painter, plot: Rect, ruler: Rect, view: &View, m: 
         if x < plot.left() - 20.0 || x > plot.right() + 20.0 {
             continue;
         }
-        painter.extend(Shape::dashed_line(&[pos2(x, ruler.bottom()), pos2(x, plot.bottom())], Stroke::new(1.0_f32, color), 4.0, 3.0));
-        let tab = Rect::from_min_size(pos2(x - 11.0, ruler.bottom() - 15.0), egui::vec2(22.0, 13.0));
+        painter.extend(Shape::dashed_line(
+            &[pos2(x, ruler.bottom()), pos2(x, plot.bottom())],
+            Stroke::new(1.0_f32, color),
+            4.0,
+            3.0,
+        ));
+        let tab = Rect::from_min_size(
+            pos2(x - 11.0, ruler.bottom() - 15.0),
+            egui::vec2(22.0, 13.0),
+        );
         painter.rect_filled(tab, 0.0, color);
-        painter.text(tab.center(), Align2::CENTER_CENTER, name, FontId::monospace(10.0), Color32::BLACK);
+        painter.text(
+            tab.center(),
+            Align2::CENTER_CENTER,
+            name,
+            FontId::monospace(10.0),
+            Color32::BLACK,
+        );
     }
 }
 
@@ -223,10 +298,19 @@ pub fn draw_trigger(painter: &Painter, plot: Rect, ruler: Rect, view: &View, sam
     if x < plot.left() - 20.0 || x > plot.right() + 20.0 {
         return;
     }
-    painter.line_segment([pos2(x, ruler.bottom()), pos2(x, plot.bottom())], Stroke::new(1.5_f32, theme::DEC_WARN));
+    painter.line_segment(
+        [pos2(x, ruler.bottom()), pos2(x, plot.bottom())],
+        Stroke::new(1.5_f32, theme::DEC_WARN),
+    );
     let tab = Rect::from_min_size(pos2(x - 7.0, ruler.bottom() - 15.0), egui::vec2(14.0, 13.0));
     painter.rect_filled(tab, 0.0, theme::DEC_WARN);
-    painter.text(tab.center(), Align2::CENTER_CENTER, "T", FontId::monospace(10.0), Color32::BLACK);
+    painter.text(
+        tab.center(),
+        Align2::CENTER_CENTER,
+        "T",
+        FontId::monospace(10.0),
+        Color32::BLACK,
+    );
 }
 
 /// Colour of an annotation: errors red, NAK orange, addresses cyan, START/STOP green, data as `base`.
@@ -259,7 +343,10 @@ pub fn draw_annotations(
     companion: Option<&[Annotation]>,
 ) {
     let width = rect.width() as f64;
-    let (a, b) = (view.start.max(0.0) as u64, view.end(width).ceil().max(0.0) as u64);
+    let (a, b) = (
+        view.start.max(0.0) as u64,
+        view.end(width).ceil().max(0.0) as u64,
+    );
     let lo = lane.partition_point(|x| x.end <= a);
     let hi = lane.partition_point(|x| x.start < b).max(lo);
     let vis = &lane[lo..hi];
@@ -280,7 +367,11 @@ pub fn draw_annotations(
             if let Some(x) = vis.get(i).filter(|x| x.start < s1.max(s0 + 1)) {
                 let col = annotation_color(x, base).gamma_multiply(0.6);
                 let px = rect.left() + c as f32;
-                painter.rect_filled(Rect::from_min_max(pos2(px, top), pos2(px + 1.0, bottom)), 0.0, col);
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(px, top), pos2(px + 1.0, bottom)),
+                    0.0,
+                    col,
+                );
             }
         }
         return;
@@ -291,21 +382,44 @@ pub fn draw_annotations(
         let (x0, x1) = (x_of(ann.start as f64), x_of(ann.end as f64));
         let color = annotation_color(ann, base);
         let is_sel = selected == Some(ann.start);
-        let stroke = Stroke::new(if is_sel { 2.0 } else { 1.0_f32 }, if is_sel { Color32::WHITE } else { color });
+        let stroke = Stroke::new(
+            if is_sel { 2.0 } else { 1.0_f32 },
+            if is_sel { Color32::WHITE } else { color },
+        );
         match ann.kind {
             Kind::Start | Kind::Stop => {
                 let w = (x1 - x0).max(3.0);
-                painter.rect_filled(Rect::from_min_max(pos2(x0, top), pos2(x0 + w, bottom)), 0.0, color.gamma_multiply(0.85));
+                painter.rect_filled(
+                    Rect::from_min_max(pos2(x0, top), pos2(x0 + w, bottom)),
+                    0.0,
+                    color.gamma_multiply(0.85),
+                );
                 if w > 11.0 {
-                    painter.text(pos2(x0 + w / 2.0, mid), Align2::CENTER_CENTER, ann.label(fmt), font.clone(), Color32::BLACK);
+                    painter.text(
+                        pos2(x0 + w / 2.0, mid),
+                        Align2::CENTER_CENTER,
+                        ann.label(fmt),
+                        font.clone(),
+                        Color32::BLACK,
+                    );
                 } else if x0 + w + 12.0 < rect.right() {
-                    painter.text(pos2(x0 + w + 2.0, mid), Align2::LEFT_CENTER, ann.label(fmt), font.clone(), color);
+                    painter.text(
+                        pos2(x0 + w + 2.0, mid),
+                        Align2::LEFT_CENTER,
+                        ann.label(fmt),
+                        font.clone(),
+                        color,
+                    );
                 }
             }
             Kind::Telegram => {
                 let (xa, xb) = (x0, x1.max(x0 + 1.0));
                 if xb - xa < 2.0 {
-                    painter.rect_filled(Rect::from_min_max(pos2(xa, top), pos2(xa + 1.0, bottom)), 0.0, color.gamma_multiply(0.6));
+                    painter.rect_filled(
+                        Rect::from_min_max(pos2(xa, top), pos2(xa + 1.0, bottom)),
+                        0.0,
+                        color.gamma_multiply(0.6),
+                    );
                     continue;
                 }
                 let bar = Rect::from_min_max(pos2(xa, top), pos2(xb, bottom));
@@ -317,17 +431,34 @@ pub fn draw_annotations(
                 if let Some(chars) = companion.filter(|_| vx1 - vx0 > 14.0) {
                     let max_chars = ((vx1 - vx0) / 6.0) as usize + 4;
                     let text = telegram_text(telegram_chars(chars, ann), fmt, max_chars);
-                    let clip = painter.with_clip_rect(Rect::from_min_max(pos2(vx0 + 1.0, top), pos2(vx1 - 1.0, bottom)));
-                    clip.text(pos2(vx0 + 5.0, mid), Align2::LEFT_CENTER, text, font.clone(), color);
+                    let clip = painter.with_clip_rect(Rect::from_min_max(
+                        pos2(vx0 + 1.0, top),
+                        pos2(vx1 - 1.0, bottom),
+                    ));
+                    clip.text(
+                        pos2(vx0 + 5.0, mid),
+                        Align2::LEFT_CENTER,
+                        text,
+                        font.clone(),
+                        color,
+                    );
                 }
             }
             _ => {
                 let (xa, xb) = (x0, x1.max(x0 + 1.0));
                 if xb - xa < 2.0 {
-                    painter.rect_filled(Rect::from_min_max(pos2(xa, top), pos2(xa + 1.0, bottom)), 0.0, color.gamma_multiply(0.6));
+                    painter.rect_filled(
+                        Rect::from_min_max(pos2(xa, top), pos2(xa + 1.0, bottom)),
+                        0.0,
+                        color.gamma_multiply(0.6),
+                    );
                     continue;
                 }
-                let (top, bottom) = if ann.kind == Kind::Frame { (mid - 2.0, mid + 2.0) } else { (top, bottom) };
+                let (top, bottom) = if ann.kind == Kind::Frame {
+                    (mid - 2.0, mid + 2.0)
+                } else {
+                    (top, bottom)
+                };
                 let slant = ((xb - xa) / 2.0).min(3.0);
                 let mid_y = (top + bottom) / 2.0;
                 painter.add(Shape::closed_line(
@@ -346,7 +477,11 @@ pub fn draw_annotations(
                     let galley = painter.layout_no_wrap(ann.label(fmt), font.clone(), color);
                     let size = galley.size();
                     if size.x + 8.0 <= vx1 - vx0 {
-                        painter.galley(pos2((vx0 + vx1) / 2.0 - size.x / 2.0, mid_y - size.y / 2.0), galley, color);
+                        painter.galley(
+                            pos2((vx0 + vx1) / 2.0 - size.x / 2.0, mid_y - size.y / 2.0),
+                            galley,
+                            color,
+                        );
                     }
                 }
             }

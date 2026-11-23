@@ -4,8 +4,8 @@
 //! rings, stall recovery).
 
 pub mod litex;
-pub mod sim;
 pub mod session;
+pub mod sim;
 pub mod stock;
 
 use bf_core::ChannelCount;
@@ -65,13 +65,16 @@ pub struct Capabilities {
 
 impl Capabilities {
     pub fn max_rate(&self, channels: u8) -> Option<f64> {
-        self.modes.iter().find(|m| m.channels == channels).map(|m| m.max_rate)
+        self.modes
+            .iter()
+            .find(|m| m.channels == channels)
+            .map(|m| m.max_rate)
     }
 
     pub fn validate(&self, cfg: &CaptureConfig) -> Result<(), DeviceError> {
-        let max = self
-            .max_rate(cfg.channels.get())
-            .ok_or_else(|| DeviceError::Config(format!("{} channels not supported", cfg.channels.get())))?;
+        let max = self.max_rate(cfg.channels.get()).ok_or_else(|| {
+            DeviceError::Config(format!("{} channels not supported", cfg.channels.get()))
+        })?;
         if cfg.sample_rate > max * 1.000_001 {
             return Err(DeviceError::Config(format!(
                 "{} channels support at most {} MHz",
@@ -80,7 +83,10 @@ impl Capabilities {
             )));
         }
         if !self.patterns.contains(&cfg.pattern) {
-            return Err(DeviceError::Config(format!("pattern {} not supported", cfg.pattern.name())));
+            return Err(DeviceError::Config(format!(
+                "pattern {} not supported",
+                cfg.pattern.name()
+            )));
         }
         Ok(())
     }

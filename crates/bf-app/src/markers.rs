@@ -89,20 +89,39 @@ mod tests {
 
     #[test]
     fn delta_readout() {
-        let m = Markers { m1: Some(100.0), m2: Some(152.5) };
+        let m = Markers {
+            m1: Some(100.0),
+            m2: Some(152.5),
+        };
         let (t, f) = delta_text(&m, 100e6).unwrap();
         assert_eq!(t, "525 ns");
         assert_eq!(f.unwrap(), "1.905 MHz");
-        let m = Markers { m1: Some(200.0), m2: Some(100.0) };
+        let m = Markers {
+            m1: Some(200.0),
+            m2: Some(100.0),
+        };
         assert_eq!(delta_text(&m, 100e6).unwrap().0, "-1.00 µs");
-        assert!(delta_text(&Markers { m1: Some(1.0), m2: None }, 100e6).is_none());
-        let same = Markers { m1: Some(5.0), m2: Some(5.0) };
+        assert!(delta_text(
+            &Markers {
+                m1: Some(1.0),
+                m2: None
+            },
+            100e6
+        )
+        .is_none());
+        let same = Markers {
+            m1: Some(5.0),
+            m2: Some(5.0),
+        };
         assert_eq!(delta_text(&same, 1e6).unwrap().1, None);
     }
 
     #[test]
     fn hit_picks_the_nearest_marker() {
-        let m = Markers { m1: Some(100.0), m2: Some(110.0) };
+        let m = Markers {
+            m1: Some(100.0),
+            m2: Some(110.0),
+        };
         assert_eq!(m.hit(103.0, 5.0), Some(Which::M1));
         assert_eq!(m.hit(108.0, 5.0), Some(Which::M2));
         assert_eq!(m.hit(200.0, 5.0), None);

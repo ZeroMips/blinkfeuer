@@ -23,7 +23,11 @@ impl ChannelCount {
 
     /// Bit mask of the valid channels in a sample word.
     pub fn mask(self) -> u32 {
-        if self.0 == 32 { u32::MAX } else { (1u32 << self.0) - 1 }
+        if self.0 == 32 {
+            u32::MAX
+        } else {
+            (1u32 << self.0) - 1
+        }
     }
 
     /// Bits used per sample on the wire.
@@ -53,7 +57,11 @@ pub struct Unpacker {
 
 impl Unpacker {
     pub fn new(channels: ChannelCount) -> Self {
-        Self { channels, carry: [0; 4], carry_len: 0 }
+        Self {
+            channels,
+            carry: [0; 4],
+            carry_len: 0,
+        }
     }
 
     pub fn channels(&self) -> ChannelCount {
@@ -95,7 +103,8 @@ impl Unpacker {
                 if self.carry_len > 0 {
                     let need = width - self.carry_len;
                     let take = need.min(data.len());
-                    self.carry[self.carry_len..self.carry_len + take].copy_from_slice(&data[..take]);
+                    self.carry[self.carry_len..self.carry_len + take]
+                        .copy_from_slice(&data[..take]);
                     self.carry_len += take;
                     data = &data[take..];
                     if self.carry_len == width {
@@ -127,12 +136,23 @@ pub fn pack_alignment(channels: ChannelCount) -> usize {
 /// Inverse of [`Unpacker::unpack`]: append the wire bytes for `samples` to `out`.
 /// `samples.len()` must be a multiple of [`pack_alignment`].
 pub fn pack(channels: ChannelCount, samples: &[u32], out: &mut Vec<u8>) {
-    assert_eq!(samples.len() % pack_alignment(channels), 0, "unaligned sample count");
+    assert_eq!(
+        samples.len() % pack_alignment(channels),
+        0,
+        "unaligned sample count"
+    );
     match channels.get() {
         2 => out.extend(samples.chunks_exact(4).map(|s| {
-            (s[0] & 3) as u8 | ((s[1] & 3) as u8) << 2 | ((s[2] & 3) as u8) << 4 | ((s[3] & 3) as u8) << 6
+            (s[0] & 3) as u8
+                | ((s[1] & 3) as u8) << 2
+                | ((s[2] & 3) as u8) << 4
+                | ((s[3] & 3) as u8) << 6
         })),
-        4 => out.extend(samples.chunks_exact(2).map(|s| (s[0] & 0xf) as u8 | ((s[1] & 0xf) as u8) << 4)),
+        4 => out.extend(
+            samples
+                .chunks_exact(2)
+                .map(|s| (s[0] & 0xf) as u8 | ((s[1] & 0xf) as u8) << 4),
+        ),
         8 => out.extend(samples.iter().map(|&s| s as u8)),
         16 => {
             for &s in samples {
@@ -239,8 +259,9 @@ mod tests {
         for n in [2u8, 4, 8, 16, 32] {
             let ch = cc(n);
             let align = pack_alignment(ch);
-            let samples: Vec<u32> =
-                (0..align as u32 * 25).map(|i| i.wrapping_mul(2654435761) & ch.mask()).collect();
+            let samples: Vec<u32> = (0..align as u32 * 25)
+                .map(|i| i.wrapping_mul(2654435761) & ch.mask())
+                .collect();
             let mut bytes = Vec::new();
             pack(ch, &samples, &mut bytes);
             assert_eq!(bytes.len() as u64, ch.bytes_for(samples.len() as u64));

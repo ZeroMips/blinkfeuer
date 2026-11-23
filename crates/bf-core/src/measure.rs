@@ -96,7 +96,13 @@ pub fn measure(store: &CaptureStore, ch: u8, range: Range<u64>) -> Option<Measur
     let edges_range = (a + 1)..b;
     let edges = store.count_toggles(ch, edges_range.clone());
     if edges > MAX_EDGES {
-        return Some(Measurement { start: a, end: b, initial_high, edges, detail: None });
+        return Some(Measurement {
+            start: a,
+            end: b,
+            initial_high,
+            edges,
+            detail: None,
+        });
     }
     let mut d = Detail::default();
     let mut level = initial_high;
@@ -142,7 +148,13 @@ pub fn measure(store: &CaptureStore, ch: u8, range: Range<u64>) -> Option<Measur
     if d.period.count == 0 {
         d.period = fall_period;
     }
-    Some(Measurement { start: a, end: b, initial_high, edges, detail: Some(d) })
+    Some(Measurement {
+        start: a,
+        end: b,
+        initial_high,
+        edges,
+        detail: Some(d),
+    })
 }
 
 #[cfg(test)]
@@ -162,7 +174,13 @@ mod tests {
     }
 
     fn square(high: usize, low: usize, periods: usize) -> Vec<u32> {
-        (0..periods).flat_map(|_| std::iter::repeat(1u32).take(high).chain(std::iter::repeat(0u32).take(low))).collect()
+        (0..periods)
+            .flat_map(|_| {
+                std::iter::repeat(1u32)
+                    .take(high)
+                    .chain(std::iter::repeat(0u32).take(low))
+            })
+            .collect()
     }
 
     #[test]
@@ -173,9 +191,33 @@ mod tests {
         let d = m.detail.unwrap();
         assert!(m.initial_high);
         assert_eq!((m.edges, d.rising, d.falling), (19, 9, 10));
-        assert_eq!(d.period, Stat { count: 8, min: 100, max: 100, sum: 800 });
-        assert_eq!(d.high, Stat { count: 9, min: 30, max: 30, sum: 270 });
-        assert_eq!(d.low, Stat { count: 9, min: 70, max: 70, sum: 630 });
+        assert_eq!(
+            d.period,
+            Stat {
+                count: 8,
+                min: 100,
+                max: 100,
+                sum: 800
+            }
+        );
+        assert_eq!(
+            d.high,
+            Stat {
+                count: 9,
+                min: 30,
+                max: 30,
+                sum: 270
+            }
+        );
+        assert_eq!(
+            d.low,
+            Stat {
+                count: 9,
+                min: 70,
+                max: 70,
+                sum: 630
+            }
+        );
         assert_eq!((d.high_samples, d.low_samples), (300, 700));
         assert!((m.duty().unwrap() - 0.3).abs() < 1e-12);
         assert_eq!(m.period_samples(), Some(100.0));
@@ -190,9 +232,34 @@ mod tests {
         assert!(m.initial_high);
         // Edges at 30 (fall), 100 (rise), 130 (fall), 200 (rise).
         assert_eq!((m.edges, d.rising, d.falling), (4, 2, 2));
-        assert_eq!(d.high, Stat { count: 1, min: 30, max: 30, sum: 30 }, "only the pulse that starts and ends inside");
-        assert_eq!(d.low, Stat { count: 2, min: 70, max: 70, sum: 140 });
-        assert_eq!(d.period, Stat { count: 1, min: 100, max: 100, sum: 100 });
+        assert_eq!(
+            d.high,
+            Stat {
+                count: 1,
+                min: 30,
+                max: 30,
+                sum: 30
+            },
+            "only the pulse that starts and ends inside"
+        );
+        assert_eq!(
+            d.low,
+            Stat {
+                count: 2,
+                min: 70,
+                max: 70,
+                sum: 140
+            }
+        );
+        assert_eq!(
+            d.period,
+            Stat {
+                count: 1,
+                min: 100,
+                max: 100,
+                sum: 100
+            }
+        );
         // High time includes the partial pulses at both ends: 15 + 30 + 15.
         assert_eq!(d.high_samples, 15 + 30 + 15);
         assert_eq!(d.high_samples + d.low_samples, 200);
@@ -211,13 +278,19 @@ mod tests {
         assert_eq!((m.start, m.end), (0, 24), "clipped to what is stored");
         // A constant signal: no edges, no period, duty 1.
         let m = measure(&store(&[1; 50]), 0, 0..50).unwrap();
-        assert_eq!((m.edges, m.duty(), m.period_samples()), (0, Some(1.0), None));
+        assert_eq!(
+            (m.edges, m.duty(), m.period_samples()),
+            (0, Some(1.0), None)
+        );
         // One edge: a single transition has no pulse and no period.
         let mut w = vec![0u32; 20];
         w.extend(vec![1u32; 20]);
         let m = measure(&store(&w), 0, 0..40).unwrap();
         let d = m.detail.unwrap();
-        assert_eq!((m.edges, d.rising, d.high.count, d.low.count, d.period.count), (1, 1, 0, 0, 0));
+        assert_eq!(
+            (m.edges, d.rising, d.high.count, d.low.count, d.period.count),
+            (1, 1, 0, 0, 0)
+        );
     }
 
     #[test]
@@ -229,7 +302,15 @@ mod tests {
         let m = measure(&store(&w), 0, 0..w.len() as u64).unwrap();
         let d = m.detail.unwrap();
         assert_eq!((d.rising, d.falling), (1, 2));
-        assert_eq!(d.period, Stat { count: 1, min: 20, max: 20, sum: 20 });
+        assert_eq!(
+            d.period,
+            Stat {
+                count: 1,
+                min: 20,
+                max: 20,
+                sum: 20
+            }
+        );
     }
 
     #[test]

@@ -2,12 +2,12 @@
 
 use crate::theme;
 use crate::view::format_split;
-use egui::{vec2, Color32, Rect, RichText, Sense};
 use bf_decode::engine::DecoderHandle;
 use bf_decode::i2c::{I2c, I2cConfig};
 use bf_decode::spi::{Spi, SpiConfig};
 use bf_decode::uart::{Parity, Uart, UartConfig};
 use bf_decode::{Annotation, Decoder, Format, Kind};
+use egui::{vec2, Color32, Rect, RichText, Sense};
 
 /// A decoder's settings, editable in the UI.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -40,8 +40,17 @@ impl Config {
     /// Default settings with channels that fit the simulator's generator pattern.
     pub fn default_for(kind: DecoderKind) -> Config {
         match kind {
-            DecoderKind::Uart => Config::Uart(UartConfig { rx: 0, ..Default::default() }),
-            DecoderKind::Spi => Config::Spi(SpiConfig { cs: Some(1), sck: 2, mosi: Some(3), miso: None, ..Default::default() }),
+            DecoderKind::Uart => Config::Uart(UartConfig {
+                rx: 0,
+                ..Default::default()
+            }),
+            DecoderKind::Spi => Config::Spi(SpiConfig {
+                cs: Some(1),
+                sck: 2,
+                mosi: Some(3),
+                miso: None,
+                ..Default::default()
+            }),
             DecoderKind::I2c => Config::I2c(I2cConfig { scl: 4, sda: 5 }),
         }
     }
@@ -90,17 +99,23 @@ mod help {
     pub const UART_LF: &str = "Also end a telegram right after a line feed (0x0A), as in line-based text protocols such as NMEA or console output.";
     pub const UART_INVERT: &str = "Use when the line idles low and a start bit is a high level (inverted logic, e.g. RS-232 seen without a level shifter).";
 
-    pub const SPI_SCK: &str = "Serial clock. Data is shifted in on its sampling edge (see CPOL and CPHA).";
+    pub const SPI_SCK: &str =
+        "Serial clock. Data is shifted in on its sampling edge (see CPOL and CPHA).";
     pub const SPI_CS: &str = "Chip select. While it is active the clock is decoded; when it ends the transaction (frame) is closed and a partly received word is flagged. 'none' decodes continuously, counting clock edges.";
-    pub const SPI_MOSI: &str = "Master Out, Slave In: data sent by the master. 'none' ignores this line.";
-    pub const SPI_MISO: &str = "Master In, Slave Out: data sent by the slave. 'none' ignores this line.";
+    pub const SPI_MOSI: &str =
+        "Master Out, Slave In: data sent by the master. 'none' ignores this line.";
+    pub const SPI_MISO: &str =
+        "Master In, Slave Out: data sent by the slave. 'none' ignores this line.";
     pub const SPI_CPOL: &str = "Clock polarity: the level of SCK while idle. Off = idle low (modes 0 and 1), on = idle high (modes 2 and 3).";
     pub const SPI_CPHA: &str = "Clock phase: which edge samples data. Off = the first (leading) edge, on = the second (trailing) edge. With CPOL off, mode 0 samples on the rising edge and mode 1 on the falling edge.";
-    pub const SPI_MSB: &str = "Bit order within a word. Most devices send the most significant bit first.";
+    pub const SPI_MSB: &str =
+        "Bit order within a word. Most devices send the most significant bit first.";
     pub const SPI_CS_LOW: &str = "Chip select is active at a low level (the usual case, written CS# or nCS). Turn off for active-high chip selects.";
-    pub const SPI_BITS: &str = "Bits per word, 2 to 32 (usually 8). A word is complete after this many sampling edges.";
+    pub const SPI_BITS: &str =
+        "Bits per word, 2 to 32 (usually 8). A word is complete after this many sampling edges.";
 
-    pub const I2C_SCL: &str = "Clock line. Open-drain with a pull-up: idles high. Bits are valid while it is high.";
+    pub const I2C_SCL: &str =
+        "Clock line. Open-drain with a pull-up: idles high. Bits are valid while it is high.";
     pub const I2C_SDA: &str = "Data line. Open-drain with a pull-up: idles high. It changes only while SCL is low, except for START (SDA falls while SCL is high) and STOP (SDA rises while SCL is high).";
 }
 
@@ -108,11 +123,16 @@ mod help {
 fn channel_combo(ui: &mut egui::Ui, id: &str, value: &mut u8, names: &[String]) -> egui::Response {
     let mut changed = false;
     let mut r = egui::ComboBox::from_id_salt(id)
-        .selected_text(format!("{value:>2} {}", names.get(*value as usize).map_or("?", |s| s.as_str())))
+        .selected_text(format!(
+            "{value:>2} {}",
+            names.get(*value as usize).map_or("?", |s| s.as_str())
+        ))
         .width(150.0)
         .show_ui(ui, |ui| {
             for (i, n) in names.iter().enumerate() {
-                changed |= ui.selectable_value(value, i as u8, format!("{i:>2} {n}")).changed();
+                changed |= ui
+                    .selectable_value(value, i as u8, format!("{i:>2} {n}"))
+                    .changed();
             }
         })
         .response;
@@ -122,16 +142,28 @@ fn channel_combo(ui: &mut egui::Ui, id: &str, value: &mut u8, names: &[String]) 
     r
 }
 
-fn optional_channel_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u8>, names: &[String]) -> egui::Response {
+fn optional_channel_combo(
+    ui: &mut egui::Ui,
+    id: &str,
+    value: &mut Option<u8>,
+    names: &[String],
+) -> egui::Response {
     let mut changed = false;
-    let text = value.map_or("none".to_string(), |v| format!("{v:>2} {}", names.get(v as usize).cloned().unwrap_or_default()));
+    let text = value.map_or("none".to_string(), |v| {
+        format!(
+            "{v:>2} {}",
+            names.get(v as usize).cloned().unwrap_or_default()
+        )
+    });
     let mut r = egui::ComboBox::from_id_salt(id)
         .selected_text(text)
         .width(150.0)
         .show_ui(ui, |ui| {
             changed |= ui.selectable_value(value, None, "none").changed();
             for (i, n) in names.iter().enumerate() {
-                changed |= ui.selectable_value(value, Some(i as u8), format!("{i:>2} {n}")).changed();
+                changed |= ui
+                    .selectable_value(value, Some(i as u8), format!("{i:>2} {n}"))
+                    .changed();
             }
         })
         .response;
@@ -142,8 +174,14 @@ fn optional_channel_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u8>, n
 }
 
 /// One labelled parameter row with hover help on both the label and the control.
-fn param(ui: &mut egui::Ui, label: &str, help: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) -> bool {
-    ui.label(RichText::new(label).color(theme::TEXT_DIM)).on_hover_text(help);
+fn param(
+    ui: &mut egui::Ui,
+    label: &str,
+    help: &str,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> bool {
+    ui.label(RichText::new(label).color(theme::TEXT_DIM))
+        .on_hover_text(help);
     let r = add(ui).on_hover_text(help);
     ui.end_row();
     r.changed()
@@ -157,7 +195,11 @@ fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn grid(ui: &mut egui::Ui, id: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::Grid::new(id).num_columns(2).spacing([14.0, 6.0]).min_col_width(110.0).show(ui, body);
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([14.0, 6.0])
+        .min_col_width(110.0)
+        .show(ui, body);
 }
 
 /// A problem with the settings that makes the decoder useless, if any.
@@ -197,19 +239,33 @@ pub struct BaudProbe {
 
 /// Edit a decoder's settings; true when anything changed. `telegrams: false` leaves out what only matters
 /// for display (a trigger does not need it); a `probe` adds baud rate detection to UART settings.
-pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[String], telegrams: bool, mut probe: Option<&mut BaudProbe>) -> bool {
+pub fn config_ui_with(
+    ui: &mut egui::Ui,
+    id: &str,
+    cfg: &mut Config,
+    names: &[String],
+    telegrams: bool,
+    mut probe: Option<&mut BaudProbe>,
+) -> bool {
     let mut changed = false;
     match cfg {
         Config::Uart(c) => {
             section(ui, "Channel", |ui| {
                 grid(ui, &format!("{id}g1"), |ui| {
-                    changed |= param(ui, "RX", help::UART_RX, |ui| channel_combo(ui, &format!("{id}rx"), &mut c.rx, names));
+                    changed |= param(ui, "RX", help::UART_RX, |ui| {
+                        channel_combo(ui, &format!("{id}rx"), &mut c.rx, names)
+                    });
                 });
             });
             section(ui, "Frame format", |ui| {
                 grid(ui, &format!("{id}g2"), |ui| {
                     changed |= param(ui, "Baud rate", help::UART_BAUD, |ui| {
-                        ui.add(egui::DragValue::new(&mut c.baud).speed(100.0).range(300.0..=20e6).suffix(" baud"))
+                        ui.add(
+                            egui::DragValue::new(&mut c.baud)
+                                .speed(100.0)
+                                .range(300.0..=20e6)
+                                .suffix(" baud"),
+                        )
                     });
                     if let Some(probe) = probe.as_deref_mut() {
                         changed |= param(ui, "Auto-detect", help::UART_DETECT, |ui| {
@@ -227,13 +283,23 @@ pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[St
                                                 format!("{} baud (not a standard rate)", g.baud)
                                             };
                                             ui.label(text);
-                                            ui.label(RichText::new(format!("fit {:.0} %, {} pulses", g.fit * 100.0, g.widths)).color(theme::TEXT_DIM));
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "fit {:.0} %, {} pulses",
+                                                    g.fit * 100.0,
+                                                    g.widths
+                                                ))
+                                                .color(theme::TEXT_DIM),
+                                            );
                                             if ui.button("Use").clicked() {
                                                 c.baud = g.baud;
                                                 used = true;
                                             }
                                             if let Some(n) = &g.note {
-                                                ui.label(RichText::new(n.as_str()).color(theme::DEC_WARN));
+                                                ui.label(
+                                                    RichText::new(n.as_str())
+                                                        .color(theme::DEC_WARN),
+                                                );
                                             }
                                         }
                                         Some((rx, Err(e))) if *rx == c.rx => {
@@ -249,14 +315,21 @@ pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[St
                             r
                         });
                     }
-                    changed |= param(ui, "Data bits", help::UART_BITS, |ui| ui.add(egui::DragValue::new(&mut c.data_bits).range(5..=9)));
+                    changed |= param(ui, "Data bits", help::UART_BITS, |ui| {
+                        ui.add(egui::DragValue::new(&mut c.data_bits).range(5..=9))
+                    });
                     changed |= param(ui, "Parity", help::UART_PARITY, |ui| {
                         let mut ch = false;
-                        let mut r = egui::ComboBox::from_id_salt(format!("{id}par")).selected_text(c.parity.label()).width(100.0).show_ui(ui, |ui| {
-                            for p in Parity::ALL {
-                                ch |= ui.selectable_value(&mut c.parity, p, p.label()).changed();
-                            }
-                        }).response;
+                        let mut r = egui::ComboBox::from_id_salt(format!("{id}par"))
+                            .selected_text(c.parity.label())
+                            .width(100.0)
+                            .show_ui(ui, |ui| {
+                                for p in Parity::ALL {
+                                    ch |=
+                                        ui.selectable_value(&mut c.parity, p, p.label()).changed();
+                                }
+                            })
+                            .response;
                         if ch {
                             r.mark_changed();
                         }
@@ -264,29 +337,51 @@ pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[St
                     });
                     changed |= param(ui, "Stop bits", help::UART_STOP, |ui| {
                         let mut ch = false;
-                        let mut r = egui::ComboBox::from_id_salt(format!("{id}stop")).selected_text(format!("{}", c.stop_bits)).width(100.0).show_ui(ui, |ui| {
-                            for s in [1.0f32, 1.5, 2.0] {
-                                ch |= ui.selectable_value(&mut c.stop_bits, s, format!("{s}")).changed();
-                            }
-                        }).response;
+                        let mut r = egui::ComboBox::from_id_salt(format!("{id}stop"))
+                            .selected_text(format!("{}", c.stop_bits))
+                            .width(100.0)
+                            .show_ui(ui, |ui| {
+                                for s in [1.0f32, 1.5, 2.0] {
+                                    ch |= ui
+                                        .selectable_value(&mut c.stop_bits, s, format!("{s}"))
+                                        .changed();
+                                }
+                            })
+                            .response;
                         if ch {
                             r.mark_changed();
                         }
                         r
                     });
-                    changed |= param(ui, "Bit order", help::UART_LSB, |ui| ui.checkbox(&mut c.lsb_first, "LSB first"));
-                    changed |= param(ui, "Polarity", help::UART_INVERT, |ui| ui.checkbox(&mut c.invert, "Inverted (idle low)"));
+                    changed |= param(ui, "Bit order", help::UART_LSB, |ui| {
+                        ui.checkbox(&mut c.lsb_first, "LSB first")
+                    });
+                    changed |= param(ui, "Polarity", help::UART_INVERT, |ui| {
+                        ui.checkbox(&mut c.invert, "Inverted (idle low)")
+                    });
                 });
             });
             if telegrams {
                 section(ui, "Telegrams", |ui| {
                     grid(ui, &format!("{id}g3"), |ui| {
-                        changed |= param(ui, "Join characters", help::UART_TELEGRAMS, |ui| ui.checkbox(&mut c.telegrams, "Show consecutive characters as telegrams"));
+                        changed |= param(ui, "Join characters", help::UART_TELEGRAMS, |ui| {
+                            ui.checkbox(
+                                &mut c.telegrams,
+                                "Show consecutive characters as telegrams",
+                            )
+                        });
                         if c.telegrams {
                             changed |= param(ui, "Idle gap", help::UART_GAP, |ui| {
-                                ui.add(egui::DragValue::new(&mut c.telegram_gap).speed(0.5).range(1.0..=10_000.0).suffix(" bit times"))
+                                ui.add(
+                                    egui::DragValue::new(&mut c.telegram_gap)
+                                        .speed(0.5)
+                                        .range(1.0..=10_000.0)
+                                        .suffix(" bit times"),
+                                )
                             });
-                            changed |= param(ui, "Line feed", help::UART_LF, |ui| ui.checkbox(&mut c.telegram_lf, "End a telegram after LF (\\n)"));
+                            changed |= param(ui, "Line feed", help::UART_LF, |ui| {
+                                ui.checkbox(&mut c.telegram_lf, "End a telegram after LF (\\n)")
+                            });
                         }
                     });
                 });
@@ -295,27 +390,56 @@ pub fn config_ui_with(ui: &mut egui::Ui, id: &str, cfg: &mut Config, names: &[St
         Config::Spi(c) => {
             section(ui, "Channels", |ui| {
                 grid(ui, &format!("{id}g1"), |ui| {
-                    changed |= param(ui, "SCK", help::SPI_SCK, |ui| channel_combo(ui, &format!("{id}sck"), &mut c.sck, names));
-                    changed |= param(ui, "CS", help::SPI_CS, |ui| optional_channel_combo(ui, &format!("{id}cs"), &mut c.cs, names));
-                    changed |= param(ui, "MOSI", help::SPI_MOSI, |ui| optional_channel_combo(ui, &format!("{id}mosi"), &mut c.mosi, names));
-                    changed |= param(ui, "MISO", help::SPI_MISO, |ui| optional_channel_combo(ui, &format!("{id}miso"), &mut c.miso, names));
+                    changed |= param(ui, "SCK", help::SPI_SCK, |ui| {
+                        channel_combo(ui, &format!("{id}sck"), &mut c.sck, names)
+                    });
+                    changed |= param(ui, "CS", help::SPI_CS, |ui| {
+                        optional_channel_combo(ui, &format!("{id}cs"), &mut c.cs, names)
+                    });
+                    changed |= param(ui, "MOSI", help::SPI_MOSI, |ui| {
+                        optional_channel_combo(ui, &format!("{id}mosi"), &mut c.mosi, names)
+                    });
+                    changed |= param(ui, "MISO", help::SPI_MISO, |ui| {
+                        optional_channel_combo(ui, &format!("{id}miso"), &mut c.miso, names)
+                    });
                 });
             });
-            section(ui, &format!("Mode {} and word format", (c.cpol as u8) << 1 | c.cpha as u8), |ui| {
-                grid(ui, &format!("{id}g2"), |ui| {
-                    changed |= param(ui, "Clock polarity", help::SPI_CPOL, |ui| ui.checkbox(&mut c.cpol, "CPOL: clock idles high"));
-                    changed |= param(ui, "Clock phase", help::SPI_CPHA, |ui| ui.checkbox(&mut c.cpha, "CPHA: sample on the trailing edge"));
-                    changed |= param(ui, "Bit order", help::SPI_MSB, |ui| ui.checkbox(&mut c.msb_first, "MSB first"));
-                    changed |= param(ui, "CS level", help::SPI_CS_LOW, |ui| ui.checkbox(&mut c.cs_active_low, "CS active low"));
-                    changed |= param(ui, "Bits per word", help::SPI_BITS, |ui| ui.add(egui::DragValue::new(&mut c.bits).range(2..=32)));
-                });
-            });
+            section(
+                ui,
+                &format!(
+                    "Mode {} and word format",
+                    (c.cpol as u8) << 1 | c.cpha as u8
+                ),
+                |ui| {
+                    grid(ui, &format!("{id}g2"), |ui| {
+                        changed |= param(ui, "Clock polarity", help::SPI_CPOL, |ui| {
+                            ui.checkbox(&mut c.cpol, "CPOL: clock idles high")
+                        });
+                        changed |= param(ui, "Clock phase", help::SPI_CPHA, |ui| {
+                            ui.checkbox(&mut c.cpha, "CPHA: sample on the trailing edge")
+                        });
+                        changed |= param(ui, "Bit order", help::SPI_MSB, |ui| {
+                            ui.checkbox(&mut c.msb_first, "MSB first")
+                        });
+                        changed |= param(ui, "CS level", help::SPI_CS_LOW, |ui| {
+                            ui.checkbox(&mut c.cs_active_low, "CS active low")
+                        });
+                        changed |= param(ui, "Bits per word", help::SPI_BITS, |ui| {
+                            ui.add(egui::DragValue::new(&mut c.bits).range(2..=32))
+                        });
+                    });
+                },
+            );
         }
         Config::I2c(c) => {
             section(ui, "Channels", |ui| {
                 grid(ui, &format!("{id}g1"), |ui| {
-                    changed |= param(ui, "SCL", help::I2C_SCL, |ui| channel_combo(ui, &format!("{id}scl"), &mut c.scl, names));
-                    changed |= param(ui, "SDA", help::I2C_SDA, |ui| channel_combo(ui, &format!("{id}sda"), &mut c.sda, names));
+                    changed |= param(ui, "SCL", help::I2C_SCL, |ui| {
+                        channel_combo(ui, &format!("{id}scl"), &mut c.scl, names)
+                    });
+                    changed |= param(ui, "SDA", help::I2C_SDA, |ui| {
+                        channel_combo(ui, &format!("{id}sda"), &mut c.sda, names)
+                    });
                 });
             });
         }
@@ -354,7 +478,13 @@ const KIND_BLURB: [(DecoderKind, &str); 3] = [
 
 /// The decoder setup screen: the list on the left, the selected decoder's settings and an example
 /// trace on the right. `end` is the capture length (progress display).
-pub fn setup_ui(ui: &mut egui::Ui, st: &mut SetupState, entries: &mut [Entry], names: &[String], end: u64) -> Vec<Action> {
+pub fn setup_ui(
+    ui: &mut egui::Ui,
+    st: &mut SetupState,
+    entries: &mut [Entry],
+    names: &[String],
+    end: u64,
+) -> Vec<Action> {
     let mut actions = Vec::new();
     st.selected = st.selected.min(entries.len().saturating_sub(1));
     let height = ui.available_height().max(300.0);
@@ -508,7 +638,11 @@ fn info_text(a: &Annotation) -> String {
         }
     }
     if a.kind == Kind::Address {
-        v.push(if a.flags & flag::READ != 0 { "read" } else { "write" });
+        v.push(if a.flags & flag::READ != 0 {
+            "read"
+        } else {
+            "write"
+        });
     }
     v.join(", ")
 }
@@ -563,15 +697,23 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
             return true;
         }
     }
-    lane.to_ascii_lowercase().contains(q) || (a.flags != 0 || a.kind == Kind::Address) && info_text(a).contains(q)
+    lane.to_ascii_lowercase().contains(q)
+        || (a.flags != 0 || a.kind == Kind::Address) && info_text(a).contains(q)
 }
 
 /// The row to jump to from the selection (the row whose annotation starts at `sel`) in direction `dir`
 /// (+1 next, -1 previous). With no selection: the first (next) or last (previous) row. Rows are sorted
 /// by start; the ends are not wrapped.
-pub fn neighbour_row(total: usize, start_of: impl Fn(usize) -> u64, sel: Option<u64>, dir: i32) -> usize {
+pub fn neighbour_row(
+    total: usize,
+    start_of: impl Fn(usize) -> u64,
+    sel: Option<u64>,
+    dir: i32,
+) -> usize {
     debug_assert!(total > 0);
-    let Some(s) = sel else { return if dir >= 0 { 0 } else { total - 1 } };
+    let Some(s) = sel else {
+        return if dir >= 0 { 0 } else { total - 1 };
+    };
     // First row starting at or after the selection.
     let (mut lo, mut hi) = (0usize, total);
     while lo < hi {
@@ -623,12 +765,17 @@ pub fn table_ui(
 ) -> Option<(Selected, Annotation, usize)> {
     let mut picked: Option<(Selected, Annotation, usize)> = None;
     if entries.is_empty() {
-        ui.label(RichText::new("No decoders yet. Use Setup > Protocol decoders... to add one.").color(theme::TEXT_DIM));
+        ui.label(
+            RichText::new("No decoders yet. Use Setup > Protocol decoders... to add one.")
+                .color(theme::TEXT_DIM),
+        );
         return None;
     }
     st.entry = st.entry.min(entries.len() - 1);
     let entry = &entries[st.entry];
-    let used: Vec<usize> = (0..entry.handle.lanes.len()).filter(|&l| entry.handle.lane_used.get(l).copied().unwrap_or(false)).collect();
+    let used: Vec<usize> = (0..entry.handle.lanes.len())
+        .filter(|&l| entry.handle.lane_used.get(l).copied().unwrap_or(false))
+        .collect();
     if !used.contains(&st.lane) {
         st.lane = used.first().copied().unwrap_or(0);
     }
@@ -654,7 +801,11 @@ pub fn table_ui(
         st.search = None;
     } else {
         if st.search.as_ref().is_none_or(|s| s.key != key) {
-            st.search = Some(Search { key, scanned: 0, hits: Vec::new() });
+            st.search = Some(Search {
+                key,
+                scanned: 0,
+                hits: Vec::new(),
+            });
         }
         if let Some(s) = st.search.as_mut() {
             let end = (s.scanned + SEARCH_SLICE).min(lane.len());
@@ -713,27 +864,56 @@ pub fn table_ui(
     // ---- navigation with Prev/Next relative to the selection
     if let Some(dir) = st.nav.take() {
         if total > 0 {
-            let sel_start = selected.filter(|s| s.id == entry.handle.id.0 && s.lane as usize == st.lane).map(|s| s.start);
+            let sel_start = selected
+                .filter(|s| s.id == entry.handle.id.0 && s.lane as usize == st.lane)
+                .map(|s| s.start);
             let row = neighbour_row(total, |r| lane[ann_index(r)].start, sel_start, dir);
             let i = ann_index(row);
             let a = lane[i];
-            picked = Some((Selected { id: entry.handle.id.0, lane: st.lane as u8, start: a.start }, a, i));
+            picked = Some((
+                Selected {
+                    id: entry.handle.id.0,
+                    lane: st.lane as u8,
+                    start: a.start,
+                },
+                a,
+                i,
+            ));
             st.scroll_to = Some(i);
         }
     }
 
     // ---- header
     let cols: [(f32, &str); 4] = if is_telegram_lane {
-        [(0.0, "Start"), (200.0, "Duration"), (290.0, "Bytes"), (360.0, "Text")]
+        [
+            (0.0, "Start"),
+            (200.0, "Duration"),
+            (290.0, "Bytes"),
+            (360.0, "Text"),
+        ]
     } else {
-        [(0.0, "Start"), (200.0, "Duration"), (290.0, "Value"), (400.0, "Info")]
+        [
+            (0.0, "Start"),
+            (200.0, "Duration"),
+            (290.0, "Value"),
+            (400.0, "Info"),
+        ]
     };
     let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
     for (x, t) in cols {
-        ui.painter().text(head.left_center() + vec2(x + 4.0, 0.0), egui::Align2::LEFT_CENTER, t, egui::FontId::monospace(11.0), theme::TEXT_DIM);
+        ui.painter().text(
+            head.left_center() + vec2(x + 4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            t,
+            egui::FontId::monospace(11.0),
+            theme::TEXT_DIM,
+        );
     }
 
-    ui.painter().line_segment([head.left_bottom(), head.right_bottom()], egui::Stroke::new(1.0_f32, theme::BORDER));
+    ui.painter().line_segment(
+        [head.left_bottom(), head.right_bottom()],
+        egui::Stroke::new(1.0_f32, theme::BORDER),
+    );
     ui.add_space(2.0);
 
     // ---- rows
@@ -750,14 +930,22 @@ pub fn table_ui(
         for row in range {
             let i = ann_index(row);
             let a = &lane[i];
-            let is_sel = selected.is_some_and(|s| s.id == entry.handle.id.0 && s.lane as usize == st.lane && s.start == a.start);
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+            let is_sel = selected.is_some_and(|s| {
+                s.id == entry.handle.id.0 && s.lane as usize == st.lane && s.start == a.start
+            });
+            let (rect, resp) =
+                ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
             if is_sel {
                 ui.painter().rect_filled(rect, 0.0, theme::SELECT);
             } else if resp.hovered() {
-                ui.painter().rect_filled(rect, 0.0, Color32::from_white_alpha(0x10));
+                ui.painter()
+                    .rect_filled(rect, 0.0, Color32::from_white_alpha(0x10));
             }
-            let color = if a.is_error() { theme::DEC_ERR } else { theme::TEXT };
+            let color = if a.is_error() {
+                theme::DEC_ERR
+            } else {
+                theme::TEXT
+            };
             let font = egui::FontId::monospace(11.0);
             let (third, fourth) = if is_telegram_lane {
                 let text = bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), fmt, 400);
@@ -766,16 +954,46 @@ pub fn table_ui(
                 (a.label(fmt), (info_text(a), theme::DEC_WARN))
             };
             let cells: [(f32, String, Color32); 4] = [
-                (cols[0].0, format_split((a.start as f64 - origin) / rate, 1.0 / rate), theme::TEXT),
-                (cols[1].0, crate::view::format_duration((a.end - a.start) as f64 / rate), theme::TEXT_DIM),
-                (cols[2].0, third, if is_telegram_lane { theme::TEXT_DIM } else { color }),
+                (
+                    cols[0].0,
+                    format_split((a.start as f64 - origin) / rate, 1.0 / rate),
+                    theme::TEXT,
+                ),
+                (
+                    cols[1].0,
+                    crate::view::format_duration((a.end - a.start) as f64 / rate),
+                    theme::TEXT_DIM,
+                ),
+                (
+                    cols[2].0,
+                    third,
+                    if is_telegram_lane {
+                        theme::TEXT_DIM
+                    } else {
+                        color
+                    },
+                ),
                 (cols[3].0, fourth.0, fourth.1),
             ];
             for (x, text, col) in cells {
-                ui.painter().with_clip_rect(rect).text(rect.left_center() + vec2(x + 4.0, 0.0), egui::Align2::LEFT_CENTER, text, font.clone(), col);
+                ui.painter().with_clip_rect(rect).text(
+                    rect.left_center() + vec2(x + 4.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    text,
+                    font.clone(),
+                    col,
+                );
             }
             if resp.clicked() {
-                picked = Some((Selected { id: entry.handle.id.0, lane: st.lane as u8, start: a.start }, *a, i));
+                picked = Some((
+                    Selected {
+                        id: entry.handle.id.0,
+                        lane: st.lane as u8,
+                        start: a.start,
+                    },
+                    *a,
+                    i,
+                ));
             }
         }
     });
@@ -797,14 +1015,22 @@ impl Config {
                     && c.telegram_gap.is_finite()
                     && c.telegram_gap >= 0.0,
             ),
-            Config::Spi(c) => ([Some(c.sck), c.cs, c.mosi, c.miso].into_iter().flatten().collect(), (2..=32).contains(&c.bits)),
+            Config::Spi(c) => (
+                [Some(c.sck), c.cs, c.mosi, c.miso]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                (2..=32).contains(&c.bits),
+            ),
             Config::I2c(c) => (vec![c.scl, c.sda], true),
         };
         if !ok {
             return Err("impossible settings".into());
         }
         match used.iter().find(|c| **c >= channels) {
-            Some(c) => Err(format!("uses channel {c}, but only {channels} are captured")),
+            Some(c) => Err(format!(
+                "uses channel {c}, but only {channels} are captured"
+            )),
             None => Ok(()),
         }
     }
@@ -821,13 +1047,26 @@ fn csv_field(s: &str) -> String {
 
 /// The decoded items of one lane as CSV: start and duration in seconds, sample numbers, kind,
 /// text (as shown in the table) and notes (errors, direction).
-pub fn write_csv(w: &mut impl std::io::Write, lanes: &[Vec<Annotation>], lane: usize, rate: f64, fmt: Format) -> std::io::Result<()> {
-    writeln!(w, "start_s,duration_s,start_sample,end_sample,kind,text,notes")?;
+pub fn write_csv(
+    w: &mut impl std::io::Write,
+    lanes: &[Vec<Annotation>],
+    lane: usize,
+    rate: f64,
+    fmt: Format,
+) -> std::io::Result<()> {
+    writeln!(
+        w,
+        "start_s,duration_s,start_sample,end_sample,kind,text,notes"
+    )?;
     let empty = Vec::new();
     let items = lanes.get(lane).unwrap_or(&empty);
     let chars = lanes.first().map_or(&[][..], |v| v.as_slice());
     for a in items {
-        let text = if a.kind == Kind::Telegram { bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), fmt, usize::MAX) } else { a.label(fmt) };
+        let text = if a.kind == Kind::Telegram {
+            bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), fmt, usize::MAX)
+        } else {
+            a.label(fmt)
+        };
         writeln!(
             w,
             "{:.12},{:.12},{},{},{:?},{},{}",
@@ -849,47 +1088,107 @@ mod tests {
     use bf_decode::flag;
 
     fn ann(kind: Kind, value: u32, flags: u8) -> Annotation {
-        Annotation { start: 0, end: 10, value, lane: 0, kind, bits: 8, flags }
+        Annotation {
+            start: 0,
+            end: 10,
+            value,
+            lane: 0,
+            kind,
+            bits: 8,
+            flags,
+        }
     }
 
     #[test]
     fn search_finds_values_in_any_format_and_case() {
         let a = ann(Kind::Data, 0xA5, 0);
         assert!(matches(&a, "RX", "a5", Format::Hex, &[]));
-        assert!(matches(&a, "RX", "a5", Format::Dec, &[]), "hex form is searched whatever the display format");
-        assert!(matches(&a, "RX", "0xa5", Format::Hex, &[]), "a 0x prefix is accepted");
+        assert!(
+            matches(&a, "RX", "a5", Format::Dec, &[]),
+            "hex form is searched whatever the display format"
+        );
+        assert!(
+            matches(&a, "RX", "0xa5", Format::Hex, &[]),
+            "a 0x prefix is accepted"
+        );
         assert!(matches(&a, "RX", "165", Format::Dec, &[]));
         assert!(!matches(&a, "RX", "a6", Format::Hex, &[]));
-        assert!(matches(&ann(Kind::Data, b'K' as u32, 0), "RX", "k", Format::Ascii, &[]));
-        assert!(matches(&a, "RX", "rx", Format::Hex, &[]), "lane names match");
+        assert!(matches(
+            &ann(Kind::Data, b'K' as u32, 0),
+            "RX",
+            "k",
+            Format::Ascii,
+            &[]
+        ));
+        assert!(
+            matches(&a, "RX", "rx", Format::Hex, &[]),
+            "lane names match"
+        );
     }
 
     #[test]
     fn search_finds_flags_by_their_words() {
         let nak = ann(Kind::Data, 0x3C, flag::NAK);
         assert!(matches(&nak, "I2C", "not ack", Format::Hex, &[]));
-        assert!(!matches(&ann(Kind::Data, 0x3C, 0), "I2C", "not ack", Format::Hex, &[]));
+        assert!(!matches(
+            &ann(Kind::Data, 0x3C, 0),
+            "I2C",
+            "not ack",
+            Format::Hex,
+            &[]
+        ));
         let fe = ann(Kind::Data, 0x00, flag::FRAMING | flag::BREAK);
         assert!(matches(&fe, "RX", "framing", Format::Hex, &[]));
         assert!(matches(&fe, "RX", "break", Format::Hex, &[]));
         let addr = ann(Kind::Address, 0x50, flag::READ);
         assert!(matches(&addr, "I2C", "read", Format::Hex, &[]));
         assert!(!matches(&addr, "I2C", "write", Format::Hex, &[]));
-        assert!(matches(&addr, "I2C", "50 r", Format::Hex, &[]), "the label text is searched too");
+        assert!(
+            matches(&addr, "I2C", "50 r", Format::Hex, &[]),
+            "the label text is searched too"
+        );
     }
 
     #[test]
     fn telegrams_are_searched_by_their_text() {
-        let chars: Vec<Annotation> = b"Hello World".iter().enumerate().map(|(i, &b)| {
-            Annotation { start: i as u64 * 20, end: i as u64 * 20 + 10, value: b as u32, lane: 0, kind: Kind::Data, bits: 8, flags: 0 }
-        }).collect();
-        let t = Annotation { start: 0, end: 210, value: 11, lane: 1, kind: Kind::Telegram, bits: 0, flags: 0 };
-        assert!(matches(&t, "Telegram", "lo wor", Format::Ascii, &chars), "a phrase spanning several characters");
+        let chars: Vec<Annotation> = b"Hello World"
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| Annotation {
+                start: i as u64 * 20,
+                end: i as u64 * 20 + 10,
+                value: b as u32,
+                lane: 0,
+                kind: Kind::Data,
+                bits: 8,
+                flags: 0,
+            })
+            .collect();
+        let t = Annotation {
+            start: 0,
+            end: 210,
+            value: 11,
+            lane: 1,
+            kind: Kind::Telegram,
+            bits: 0,
+            flags: 0,
+        };
+        assert!(
+            matches(&t, "Telegram", "lo wor", Format::Ascii, &chars),
+            "a phrase spanning several characters"
+        );
         assert!(matches(&t, "Telegram", "hello", Format::Ascii, &chars));
-        assert!(matches(&t, "Telegram", "48 65", Format::Ascii, &chars), "hex bytes also match");
+        assert!(
+            matches(&t, "Telegram", "48 65", Format::Ascii, &chars),
+            "hex bytes also match"
+        );
         assert!(!matches(&t, "Telegram", "goodbye", Format::Ascii, &chars));
         // Other telegrams' characters do not count.
-        let far = Annotation { start: 1000, end: 1100, ..t };
+        let far = Annotation {
+            start: 1000,
+            end: 1100,
+            ..t
+        };
         assert!(!matches(&far, "Telegram", "hello", Format::Ascii, &chars));
     }
 
@@ -919,16 +1218,35 @@ mod tests {
     #[test]
     fn csv_has_one_line_per_item_and_quotes_text() {
         use bf_decode::{Annotation, Format, Kind};
-        let ann = |start, end, value, kind| Annotation { start, end, value, lane: 0, kind, bits: 8, flags: 0 };
-        let lanes = vec![vec![ann(10, 20, b',' as u32, Kind::Data), ann(30, 40, b'"' as u32, Kind::Data)]];
+        let ann = |start, end, value, kind| Annotation {
+            start,
+            end,
+            value,
+            lane: 0,
+            kind,
+            bits: 8,
+            flags: 0,
+        };
+        let lanes = vec![vec![
+            ann(10, 20, b',' as u32, Kind::Data),
+            ann(30, 40, b'"' as u32, Kind::Data),
+        ]];
         let mut out = Vec::new();
         write_csv(&mut out, &lanes, 0, 1000.0, Format::Ascii).unwrap();
         let text = String::from_utf8(out).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with("start_s,duration_s"));
-        assert!(lines[1].starts_with("0.010000000000,0.010000000000,10,20,Data,\",\","), "{}", lines[1]);
-        assert!(lines[2].contains(",\"\"\"\"") || lines[2].contains("\"\"\"\""), "{}", lines[2]);
+        assert!(
+            lines[1].starts_with("0.010000000000,0.010000000000,10,20,Data,\",\","),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains(",\"\"\"\"") || lines[2].contains("\"\"\"\""),
+            "{}",
+            lines[2]
+        );
         // A lane that does not exist is just the header.
         let mut out = Vec::new();
         write_csv(&mut out, &lanes, 5, 1000.0, Format::Hex).unwrap();
@@ -939,7 +1257,10 @@ mod tests {
     fn settings_from_files_are_checked() {
         let mut c = Config::default_for(DecoderKind::Uart);
         assert!(c.check_file_values(16).is_ok());
-        assert!(c.check_file_values(0).is_err(), "channel 0 beyond zero channels");
+        assert!(
+            c.check_file_values(0).is_err(),
+            "channel 0 beyond zero channels"
+        );
         if let Config::Uart(u) = &mut c {
             u.baud = 0.0;
         }

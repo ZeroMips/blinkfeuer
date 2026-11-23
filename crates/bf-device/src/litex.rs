@@ -28,8 +28,8 @@
 
 use crate::stock::{drain, plan_ring_with, transfer_err, usb_err, Accounting, RingPlan};
 use crate::{
-    Capabilities, CaptureConfig, ChannelMode, Device, DeviceError, DeviceInfo, Pattern, ReadResult, Stream,
-    StreamReport,
+    Capabilities, CaptureConfig, ChannelMode, Device, DeviceError, DeviceInfo, Pattern, ReadResult,
+    Stream, StreamReport,
 };
 use nusb::transfer::{Bulk, ControlIn, ControlOut, ControlType, In, Recipient};
 use nusb::{Interface, MaybeFuture, Speed};
@@ -172,7 +172,14 @@ impl Ep0 for UsbEp0 {
     fn write(&mut self, value: u16, index: u16, data: &[u8]) -> Result<(), DeviceError> {
         self.iface
             .control_out(
-                ControlOut { control_type: ControlType::Vendor, recipient: Recipient::Other, request: 0, value, index, data },
+                ControlOut {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Other,
+                    request: 0,
+                    value,
+                    index,
+                    data,
+                },
                 CONTROL_TIMEOUT,
             )
             .wait()
@@ -209,22 +216,40 @@ pub fn read_info<B: Bus>(bus: &mut B) -> Result<Info, DeviceError> {
         )));
     }
     if version >> 16 != 0 {
-        return Err(DeviceError::Other(format!("gateware version {version:#x} is newer than this program understands")));
+        return Err(DeviceError::Other(format!(
+            "gateware version {version:#x} is newer than this program understands"
+        )));
     }
     let ratio = (config >> 8) & 0xff;
     if ratio == 0 || base_rate == 0 {
-        return Err(DeviceError::Other("the gateware reports no sample rate".into()));
+        return Err(DeviceError::Other(
+            "the gateware reports no sample rate".into(),
+        ));
     }
     let mut ident = [0u32; 64];
     bus.read_burst(reg::IDENTIFIER_BASE, &mut ident)?;
-    let ident: String = ident.iter().map(|w| (*w & 0xff) as u8).take_while(|c| *c != 0).map(char::from).collect();
-    Ok(Info { version, nchannels: config & 0xff, ratio, fifo_words: ((config >> 16) & 0xffff) * 64, base_rate, ident })
+    let ident: String = ident
+        .iter()
+        .map(|w| (*w & 0xff) as u8)
+        .take_while(|c| *c != 0)
+        .map(char::from)
+        .collect();
+    Ok(Info {
+        version,
+        nchannels: config & 0xff,
+        ratio,
+        fifo_words: ((config >> 16) & 0xffff) * 64,
+        base_rate,
+        ident,
+    })
 }
 
 /// The gateware turns up to 32 bits into one word per sample-clock cycle: `ceil(ratio/divider)`
 /// samples per cycle, so the product with the channel count must not exceed 32.
 fn divider_ok(info: &Info, channels: u8, divider: u64) -> bool {
-    divider >= 1 && divider <= u32::MAX as u64 && (info.ratio as u64).div_ceil(divider) * channels as u64 <= 32
+    divider >= 1
+        && divider <= u32::MAX as u64
+        && (info.ratio as u64).div_ceil(divider) * channels as u64 <= 32
 }
 
 /// Highest sample rate for `channels` channels (Hz), 0 if none.
@@ -266,11 +291,19 @@ pub fn capabilities(info: &Info) -> Capabilities {
     let modes: Vec<ChannelMode> = [4u8, 8, 16]
         .into_iter()
         .filter(|&c| c as u32 <= info.nchannels.max(16))
-        .map(|c| ChannelMode { channels: c, max_rate: max_samplerate(info, c) as f64 })
+        .map(|c| ChannelMode {
+            channels: c,
+            max_rate: max_samplerate(info, c) as f64,
+        })
         .filter(|m| m.max_rate > 0.0)
         .collect();
     let rates = samplerates(info, 4);
-    Capabilities { modes, rates, patterns: vec![Pattern::Inputs, Pattern::Counter, Pattern::Generator], threshold: None }
+    Capabilities {
+        modes,
+        rates,
+        patterns: vec![Pattern::Inputs, Pattern::Counter, Pattern::Generator],
+        threshold: None,
+    }
 }
 
 /// The divider for `cfg`, or why the rate cannot be had.
@@ -278,7 +311,10 @@ pub fn divider_for(info: &Info, cfg: &CaptureConfig) -> Result<u32, DeviceError>
     let rate = cfg.sample_rate.round() as u64;
     let base = info.base_rate as u64;
     if rate == 0 || base % rate != 0 {
-        return Err(DeviceError::Config(format!("a sample rate of {rate} Hz is not {} MHz / N", base as f64 / 1e6)));
+        return Err(DeviceError::Config(format!(
+            "a sample rate of {rate} Hz is not {} MHz / N",
+            base as f64 / 1e6
+        )));
     }
     let divider = base / rate;
     if !divider_ok(info, cfg.channels.get(), divider) {
@@ -297,7 +333,9 @@ pub fn mode_code(channels: u8) -> Result<u32, DeviceError> {
         4 => Ok(0),
         8 => Ok(1),
         16 => Ok(2),
-        n => Err(DeviceError::Config(format!("{n} channels are not supported (4, 8 or 16)"))),
+        n => Err(DeviceError::Config(format!(
+            "{n} channels are not supported (4, 8 or 16)"
+        ))),
     }
 }
 
@@ -306,14 +344,21 @@ pub fn pattern_code(p: Pattern) -> Result<u32, DeviceError> {
         Pattern::Inputs => Ok(0),
         Pattern::Counter => Ok(1),
         Pattern::Generator => Ok(2),
-        Pattern::Emulation => Err(DeviceError::Config("the Emulation pattern exists only in the stock firmware".into())),
+        Pattern::Emulation => Err(DeviceError::Config(
+            "the Emulation pattern exists only in the stock firmware".into(),
+        )),
     }
 }
 
 /// Write the control word (without ENABLE), the divider and the limit. Returns the control word.
-pub fn configure<B: Bus>(bus: &mut B, info: &Info, cfg: &CaptureConfig) -> Result<u32, DeviceError> {
+pub fn configure<B: Bus>(
+    bus: &mut B,
+    info: &Info,
+    cfg: &CaptureConfig,
+) -> Result<u32, DeviceError> {
     let divider = divider_for(info, cfg)?;
-    let control = reg::control_mode(mode_code(cfg.channels.get())?) | reg::control_pattern(pattern_code(cfg.pattern)?);
+    let control = reg::control_mode(mode_code(cfg.channels.get())?)
+        | reg::control_pattern(pattern_code(cfg.pattern)?);
     bus.write32(reg::ANALYZER_CONTROL, control)?;
     bus.write32(reg::ANALYZER_DIVIDER, divider)?;
     bus.write64(reg::ANALYZER_LIMIT, cfg.limit_samples.unwrap_or(0))?;
@@ -352,7 +397,12 @@ pub fn disable<B: Bus>(bus: &mut B) -> Result<(), DeviceError> {
 /// experiments (the gateware has been seen to overflow at transfer boundaries on some hosts).
 pub fn plan(rate: f64, channels: u8, limit_bytes: Option<u64>) -> RingPlan {
     let mut p = plan_ring_with(rate, channels, limit_bytes, 0);
-    let env = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|v| *v > 0);
+    let env = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|v| *v > 0)
+    };
     if let Some(kib) = env("BLINKFEUER_LITEX_XFER_KIB") {
         p.xfer = kib.div_ceil(32) * 32 * 1024;
     }
@@ -394,7 +444,9 @@ fn is_ours(d: &nusb::DeviceInfo) -> bool {
 impl LitexDevice {
     /// Descriptions of the attached analyzers running the gateware (without opening them).
     pub fn available() -> Vec<DeviceInfo> {
-        let Ok(list) = nusb::list_devices().wait() else { return Vec::new() };
+        let Ok(list) = nusb::list_devices().wait() else {
+            return Vec::new();
+        };
         list.filter(is_ours).map(|d| describe(&d)).collect()
     }
 
@@ -404,11 +456,21 @@ impl LitexDevice {
             .wait()
             .map_err(|e| usb_err("listing USB devices", e))?
             .find(is_ours)
-            .ok_or_else(|| DeviceError::Other("no SLogic16U3 with the LiteX gateware (1d50:605a) found".into()))?;
+            .ok_or_else(|| {
+                DeviceError::Other("no SLogic16U3 with the LiteX gateware (1d50:605a) found".into())
+            })?;
         let info = describe(&di);
-        let dev = di.open().wait().map_err(|e| usb_err("opening the device", e))?;
-        let iface = dev.claim_interface(0).wait().map_err(|e| usb_err("claiming interface 0", e))?;
-        let mut bus = Ep0Bus(UsbEp0 { iface: iface.clone() });
+        let dev = di
+            .open()
+            .wait()
+            .map_err(|e| usb_err("opening the device", e))?;
+        let iface = dev
+            .claim_interface(0)
+            .wait()
+            .map_err(|e| usb_err("claiming interface 0", e))?;
+        let mut bus = Ep0Bus(UsbEp0 {
+            iface: iface.clone(),
+        });
         let gateware = read_info(&mut bus)?;
         // A capture left over from a killed program: stop it and throw its data away.
         let _ = disable(&mut bus);
@@ -416,7 +478,12 @@ impl LitexDevice {
             drain(&mut ep);
         }
         let caps = capabilities(&gateware);
-        Ok(Self { iface, info, gateware, caps })
+        Ok(Self {
+            iface,
+            info,
+            gateware,
+            caps,
+        })
     }
 
     /// What the gateware reported.
@@ -437,11 +504,16 @@ impl Device for LitexDevice {
     fn start(&mut self, cfg: &CaptureConfig) -> Result<Box<dyn Stream>, DeviceError> {
         self.caps.validate(cfg)?;
         divider_for(&self.gateware, cfg)?;
-        let ep = self.iface.endpoint::<Bulk, In>(EP_IN).map_err(|e| usb_err("opening bulk IN endpoint 0x81", e))?;
+        let ep = self
+            .iface
+            .endpoint::<Bulk, In>(EP_IN)
+            .map_err(|e| usb_err("opening bulk IN endpoint 0x81", e))?;
         let limit_bytes = cfg.limit_samples.map(|n| cfg.channels.bytes_for(n));
         let plan = plan(cfg.sample_rate, cfg.channels.get(), limit_bytes);
         let mut s = LitexStream {
-            bus: Ep0Bus(UsbEp0 { iface: self.iface.clone() }),
+            bus: Ep0Bus(UsbEp0 {
+                iface: self.iface.clone(),
+            }),
             gateware: self.gateware.clone(),
             ep,
             cfg: cfg.clone(),
@@ -485,9 +557,13 @@ impl LitexStream {
     /// configure -> clear halt -> queue the transfers -> ENABLE.
     fn begin(&mut self) -> Result<(), DeviceError> {
         let control = configure(&mut self.bus, &self.gateware, &self.cfg)?;
-        self.ep.clear_halt().wait().map_err(|e| usb_err("clearing endpoint halt", e))?;
+        self.ep
+            .clear_halt()
+            .wait()
+            .map_err(|e| usb_err("clearing endpoint halt", e))?;
         self.fill_ring();
-        self.bus.write32(reg::ANALYZER_CONTROL, control | reg::CONTROL_ENABLE)?;
+        self.bus
+            .write32(reg::ANALYZER_CONTROL, control | reg::CONTROL_ENABLE)?;
         self.t_run = Instant::now();
         self.t_data = self.t_run;
         Ok(())
@@ -508,11 +584,18 @@ impl LitexStream {
         match status(&mut self.bus) {
             Ok(st) if st.overflow || st.error => {
                 self.report.overflow = st.overflow;
-                Err(if st.overflow { DeviceError::Overflow } else { DeviceError::Other("the gateware reports a capture error".into()) })
+                Err(if st.overflow {
+                    DeviceError::Overflow
+                } else {
+                    DeviceError::Other("the gateware reports a capture error".into())
+                })
             }
             Ok(_) => Ok(ReadResult::Ended),
             Err(e) => {
-                self.report.note = Some(format!("{}; status unreadable: {e}", self.report.note.clone().unwrap_or_default()));
+                self.report.note = Some(format!(
+                    "{}; status unreadable: {e}",
+                    self.report.note.clone().unwrap_or_default()
+                ));
                 Ok(ReadResult::Ended)
             }
         }
@@ -525,7 +608,11 @@ impl Stream for LitexStream {
             return Ok(ReadResult::Ended);
         }
         if self.device_ended {
-            return if self.finished { Ok(ReadResult::Ended) } else { self.check_end() };
+            return if self.finished {
+                Ok(ReadResult::Ended)
+            } else {
+                self.check_end()
+            };
         }
         if self.ep.pending() == 0 {
             self.fill_ring();
@@ -557,7 +644,9 @@ impl Stream for LitexStream {
             }
         }
         status.map_err(|e| match e {
-            nusb::transfer::TransferError::Cancelled => DeviceError::Stalled("transfer cancelled".into()),
+            nusb::transfer::TransferError::Cancelled => {
+                DeviceError::Stalled("transfer cancelled".into())
+            }
             other => transfer_err(&other),
         })?;
         if !data.is_empty() {
@@ -636,10 +725,12 @@ mod tests {
             let mut f = Fake::default();
             f.regs.insert(reg::ANALYZER_MAGIC, reg::MAGIC);
             f.regs.insert(reg::ANALYZER_MAGIC + 4, 0x0001);
-            f.regs.insert(reg::ANALYZER_MAGIC + 8, 16 | 8 << 8 | 32 << 16);
+            f.regs
+                .insert(reg::ANALYZER_MAGIC + 8, 16 | 8 << 8 | 32 << 16);
             f.regs.insert(reg::ANALYZER_MAGIC + 12, 800_000_000);
             for (i, c) in b"SLogic16U3 LiteX\0".iter().enumerate() {
-                f.regs.insert(reg::IDENTIFIER_BASE + 4 * i as u32, *c as u32);
+                f.regs
+                    .insert(reg::IDENTIFIER_BASE + 4 * i as u32, *c as u32);
             }
             f
         }
@@ -669,7 +760,13 @@ mod tests {
     }
 
     fn cfg(ch: u8, rate: f64, pattern: Pattern, limit: Option<u64>) -> CaptureConfig {
-        CaptureConfig { channels: ChannelCount::new(ch).unwrap(), sample_rate: rate, limit_samples: limit, pattern, threshold_v: 1.7 }
+        CaptureConfig {
+            channels: ChannelCount::new(ch).unwrap(),
+            sample_rate: rate,
+            limit_samples: limit,
+            pattern,
+            threshold_v: 1.7,
+        }
     }
 
     fn info() -> Info {
@@ -679,12 +776,17 @@ mod tests {
     #[test]
     fn identification_is_read_and_checked() {
         let i = info();
-        assert_eq!((i.nchannels, i.ratio, i.base_rate, i.fifo_words), (16, 8, 800_000_000, 2048));
+        assert_eq!(
+            (i.nchannels, i.ratio, i.base_rate, i.fifo_words),
+            (16, 8, 800_000_000, 2048)
+        );
         assert_eq!(i.ident, "SLogic16U3 LiteX");
         // Something else answering at the same address, a newer gateware and a broken one are refused.
         let mut f = Fake::gateware();
         f.regs.insert(reg::ANALYZER_MAGIC, 0x1234_5678);
-        assert!(matches!(read_info(&mut f), Err(DeviceError::Other(m)) if m.contains("not the SLogic16U3 gateware")));
+        assert!(
+            matches!(read_info(&mut f), Err(DeviceError::Other(m)) if m.contains("not the SLogic16U3 gateware"))
+        );
         let mut f = Fake::gateware();
         f.regs.insert(reg::ANALYZER_MAGIC + 4, 0x0002_0000);
         assert!(read_info(&mut f).is_err());
@@ -703,8 +805,16 @@ mod tests {
         assert_eq!(max_samplerate(&i, 8), 400_000_000);
         assert_eq!(max_samplerate(&i, 16), 200_000_000);
         let r16 = samplerates(&i, 16);
-        assert!(r16.contains(&100e6) && r16.contains(&200e6) && r16.contains(&160e6) && r16.contains(&1e6));
-        assert!(!r16.contains(&250e6) && !r16.contains(&400e6), "too fast for 16 channels");
+        assert!(
+            r16.contains(&100e6)
+                && r16.contains(&200e6)
+                && r16.contains(&160e6)
+                && r16.contains(&1e6)
+        );
+        assert!(
+            !r16.contains(&250e6) && !r16.contains(&400e6),
+            "too fast for 16 channels"
+        );
         assert!(r16.windows(2).all(|w| w[0] < w[1]), "ascending and unique");
         // Only divisors of the base rate are offered.
         assert!(r16.iter().all(|r| 800e6 % r == 0.0));
@@ -714,19 +824,38 @@ mod tests {
         assert_eq!(caps.max_rate(8), Some(400e6));
         assert_eq!(caps.max_rate(4), Some(800e6));
         assert!(caps.threshold.is_none());
-        assert!(caps.patterns.contains(&Pattern::Generator) && !caps.patterns.contains(&Pattern::Emulation));
+        assert!(
+            caps.patterns.contains(&Pattern::Generator)
+                && !caps.patterns.contains(&Pattern::Emulation)
+        );
     }
 
     #[test]
     fn dividers_and_bad_rates() {
         let i = info();
-        assert_eq!(divider_for(&i, &cfg(16, 100e6, Pattern::Inputs, None)).unwrap(), 8);
-        assert_eq!(divider_for(&i, &cfg(4, 800e6, Pattern::Inputs, None)).unwrap(), 1);
-        assert_eq!(divider_for(&i, &cfg(16, 160e6, Pattern::Inputs, None)).unwrap(), 5);
-        assert_eq!(divider_for(&i, &cfg(16, 5e6, Pattern::Inputs, None)).unwrap(), 160);
-        let e = divider_for(&i, &cfg(16, 123e6, Pattern::Inputs, None)).unwrap_err().to_string();
+        assert_eq!(
+            divider_for(&i, &cfg(16, 100e6, Pattern::Inputs, None)).unwrap(),
+            8
+        );
+        assert_eq!(
+            divider_for(&i, &cfg(4, 800e6, Pattern::Inputs, None)).unwrap(),
+            1
+        );
+        assert_eq!(
+            divider_for(&i, &cfg(16, 160e6, Pattern::Inputs, None)).unwrap(),
+            5
+        );
+        assert_eq!(
+            divider_for(&i, &cfg(16, 5e6, Pattern::Inputs, None)).unwrap(),
+            160
+        );
+        let e = divider_for(&i, &cfg(16, 123e6, Pattern::Inputs, None))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("not 800 MHz / N"), "{e}");
-        let e = divider_for(&i, &cfg(16, 400e6, Pattern::Inputs, None)).unwrap_err().to_string();
+        let e = divider_for(&i, &cfg(16, 400e6, Pattern::Inputs, None))
+            .unwrap_err()
+            .to_string();
         assert!(e.contains("too fast for 16 channels"), "{e}");
         assert!(divider_for(&i, &cfg(8, 400e6, Pattern::Inputs, None)).is_ok());
     }
@@ -735,7 +864,12 @@ mod tests {
     fn configure_writes_control_divider_and_limit_in_order() {
         let i = info();
         let mut f = Fake::gateware();
-        let control = configure(&mut f, &i, &cfg(16, 100e6, Pattern::Counter, Some(0x1_0000_0003))).unwrap();
+        let control = configure(
+            &mut f,
+            &i,
+            &cfg(16, 100e6, Pattern::Counter, Some(0x1_0000_0003)),
+        )
+        .unwrap();
         // 16 channels = mode 2 (bits 5:4), counter = pattern 1 (bits 9:8), not enabled.
         assert_eq!(control, 2 << 4 | 1 << 8);
         assert_eq!(
@@ -752,8 +886,16 @@ mod tests {
         let mut f = Fake::gateware();
         configure(&mut f, &i, &cfg(4, 800e6, Pattern::Generator, None)).unwrap();
         assert_eq!(f.writes[0], (reg::ANALYZER_CONTROL, 0 << 4 | 2 << 8));
-        assert_eq!(&f.writes[2..], &[(reg::ANALYZER_LIMIT, 0), (reg::ANALYZER_LIMIT + 4, 0)]);
-        assert!(configure(&mut Fake::gateware(), &i, &cfg(16, 100e6, Pattern::Emulation, None)).is_err());
+        assert_eq!(
+            &f.writes[2..],
+            &[(reg::ANALYZER_LIMIT, 0), (reg::ANALYZER_LIMIT + 4, 0)]
+        );
+        assert!(configure(
+            &mut Fake::gateware(),
+            &i,
+            &cfg(16, 100e6, Pattern::Emulation, None)
+        )
+        .is_err());
         assert_eq!(mode_code(8).unwrap(), 1);
         assert!(mode_code(2).is_err());
     }
@@ -761,17 +903,32 @@ mod tests {
     #[test]
     fn status_and_disable() {
         let mut f = Fake::gateware();
-        f.regs.insert(reg::ANALYZER_STATUS, reg::STATUS_DONE | reg::STATUS_OVERFLOW);
+        f.regs.insert(
+            reg::ANALYZER_STATUS,
+            reg::STATUS_DONE | reg::STATUS_OVERFLOW,
+        );
         f.regs.insert(reg::ANALYZER_COUNT, 0x2);
         f.regs.insert(reg::ANALYZER_COUNT + 4, 0x10);
         let st = status(&mut f).unwrap();
-        assert_eq!(st, Status { running: false, done: true, overflow: true, error: false, samples: 0x2_0000_0010 });
+        assert_eq!(
+            st,
+            Status {
+                running: false,
+                done: true,
+                overflow: true,
+                error: false,
+                samples: 0x2_0000_0010
+            }
+        );
         // Disabling keeps the mode and pattern bits.
         f.regs.insert(reg::ANALYZER_CONTROL, 0x121);
         disable(&mut f).unwrap();
         assert_eq!(f.writes.last(), Some(&(reg::ANALYZER_CONTROL, 0x120)));
         f.fail = true;
-        assert!(disable(&mut f).is_err(), "a device that does not answer is an error, not a hang");
+        assert!(
+            disable(&mut f).is_err(),
+            "a device that does not answer is an error, not a hang"
+        );
     }
 
     /// EP0 stand-in that records the transfers and answers with counting words.
@@ -807,16 +964,25 @@ mod tests {
         let mut out = vec![0u32; 300];
         bus.read_burst(0x1ff8, &mut out).unwrap();
         assert!(out.iter().all(|w| *w == 0xABAB_ABAB));
-        assert_eq!(bus.0.reads, [(0x1ff8, 0, 512), (0x21f8, 0, 512), (0x23f8, 0, 176)]);
+        assert_eq!(
+            bus.0.reads,
+            [(0x1ff8, 0, 512), (0x21f8, 0, 512), (0x23f8, 0, 176)]
+        );
         // Words travel little-endian, and the write is cut the same way.
         let vals: Vec<u32> = (0..130).collect();
         bus.write_burst(0x0800, &vals).unwrap();
         assert_eq!(bus.0.writes.len(), 2);
         assert_eq!(bus.0.writes[0].2.len(), 512);
         assert_eq!(&bus.0.writes[0].2[4..8], &1u32.to_le_bytes());
-        assert_eq!((bus.0.writes[1].0, bus.0.writes[1].2.len()), (0x0800 + 512, 8));
+        assert_eq!(
+            (bus.0.writes[1].0, bus.0.writes[1].2.len()),
+            (0x0800 + 512, 8)
+        );
         // A short answer is an error.
-        let mut bus = Ep0Bus(FakeEp0 { short: true, ..Default::default() });
+        let mut bus = Ep0Bus(FakeEp0 {
+            short: true,
+            ..Default::default()
+        });
         assert!(bus.read32(reg::ANALYZER_STATUS).is_err());
     }
 

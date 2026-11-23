@@ -57,7 +57,11 @@ impl Purpose {
 
 pub(super) enum JobResult {
     Done(String),
-    Loaded { path: PathBuf, store: Box<CaptureStore>, setup: serde_json::Value },
+    Loaded {
+        path: PathBuf,
+        store: Box<CaptureStore>,
+        setup: serde_json::Value,
+    },
     Failed(String),
 }
 
@@ -86,7 +90,14 @@ impl DeviceChoice {
     }
 
     fn from_key(k: &str) -> Option<Self> {
-        [DeviceChoice::Sim, DeviceChoice::SimRealtime, DeviceChoice::Stock, DeviceChoice::Litex].into_iter().find(|d| d.key() == k)
+        [
+            DeviceChoice::Sim,
+            DeviceChoice::SimRealtime,
+            DeviceChoice::Stock,
+            DeviceChoice::Litex,
+        ]
+        .into_iter()
+        .find(|d| d.key() == k)
     }
 }
 
@@ -99,7 +110,10 @@ fn with_extension(path: PathBuf, ext: &str) -> PathBuf {
 }
 
 /// Write to `path.tmp` and rename, so that an error never destroys an existing file.
-fn write_via_temp(path: &Path, f: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<(), String>) -> Result<(), String> {
+fn write_via_temp(
+    path: &Path,
+    f: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<(), String>,
+) -> Result<(), String> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -107,7 +121,10 @@ fn write_via_temp(path: &Path, f: impl FnOnce(&mut BufWriter<std::fs::File>) -> 
         let file = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut w = BufWriter::with_capacity(1 << 20, file);
         f(&mut w)?;
-        w.into_inner().map_err(|e| e.to_string())?.sync_all().map_err(|e| e.to_string())?;
+        w.into_inner()
+            .map_err(|e| e.to_string())?
+            .sync_all()
+            .map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
     })();
     if result.is_err() {
@@ -128,7 +145,13 @@ fn load_capture_file(path: &Path) -> Result<(CaptureStore, serde_json::Value), S
         let n = c.store.channels();
         let mut layout = Layout::new(n as usize);
         layout.names = c.names;
-        let setup = Setup { version: setup::VERSION, channels: Some(n), rate: Some(c.sample_rate), layout: Some(layout), ..Default::default() };
+        let setup = Setup {
+            version: setup::VERSION,
+            channels: Some(n),
+            rate: Some(c.sample_rate),
+            layout: Some(layout),
+            ..Default::default()
+        };
         Ok((c.store, setup.to_json()))
     } else {
         let l = read_capture(BufReader::with_capacity(1 << 20, file)).map_err(|e| e.to_string())?;
@@ -162,7 +185,13 @@ impl App {
             decoders: self
                 .decoders
                 .iter()
-                .map(|e| DecoderSetup { id: e.handle.id.0, name: e.name.clone(), format: e.format, color: e.color, config: e.cfg.clone() })
+                .map(|e| DecoderSetup {
+                    id: e.handle.id.0,
+                    name: e.name.clone(),
+                    format: e.format,
+                    color: e.color,
+                    config: e.cfg.clone(),
+                })
                 .collect(),
             trigger: Some(self.trigger.clone()),
             zero_at_trigger: Some(self.zero_at_trigger),
@@ -189,7 +218,13 @@ impl App {
             self.pattern = s
                 .pattern
                 .as_deref()
-                .and_then(|p| self.device.patterns().iter().find(|x| x.name() == p).copied())
+                .and_then(|p| {
+                    self.device
+                        .patterns()
+                        .iter()
+                        .find(|x| x.name() == p)
+                        .copied()
+                })
                 .unwrap_or(self.device.patterns()[0]);
             if let Some(t) = s.threshold.filter(|t| t.is_finite()) {
                 self.threshold = t.clamp(0.0, 3.3);
@@ -221,7 +256,12 @@ impl App {
         if let Some(v) = s.row_auto {
             self.row_auto = v;
         }
-        if let Some(d) = s.last_dir.as_deref().map(PathBuf::from).filter(|d| d.is_dir()) {
+        if let Some(d) = s
+            .last_dir
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|d| d.is_dir())
+        {
             self.last_dir = Some(d);
         }
 
@@ -250,7 +290,13 @@ impl App {
             }
             let handle = self.engine.add(d.config.build());
             map.insert(d.id, handle.id.0);
-            self.decoders.push(Entry { handle, cfg: d.config, name: d.name, format: d.format, color: d.color });
+            self.decoders.push(Entry {
+                handle,
+                cfg: d.config,
+                name: d.name,
+                format: d.format,
+                color: d.color,
+            });
         }
         if let Some(mut l) = layout {
             l.map_decoder_ids(&map);
@@ -263,9 +309,15 @@ impl App {
 
         if what.view {
             if let Some((a, b)) = s.markers {
-                self.markers = Markers { m1: a.filter(|v| v.is_finite()), m2: b.filter(|v| v.is_finite()) };
+                self.markers = Markers {
+                    m1: a.filter(|v| v.is_finite()),
+                    m2: b.filter(|v| v.is_finite()),
+                };
             }
-            if let Some((start, spp)) = s.view.filter(|(a, b)| a.is_finite() && b.is_finite() && *b > 0.0) {
+            if let Some((start, spp)) = s
+                .view
+                .filter(|(a, b)| a.is_finite() && b.is_finite() && *b > 0.0)
+            {
                 self.view = View { start, spp };
                 self.follow = false;
             }
@@ -278,7 +330,8 @@ impl App {
     }
 
     pub(super) fn autosave_enabled(&self) -> bool {
-        std::env::var_os("BLINKFEUER_CONFIG_DIR").is_some() || !(self.opts.demo || self.opts.screenshot.is_some())
+        std::env::var_os("BLINKFEUER_CONFIG_DIR").is_some()
+            || !(self.opts.demo || self.opts.screenshot.is_some())
     }
 
     /// Take over the setup of the last run.
@@ -286,10 +339,18 @@ impl App {
         if !self.autosave_enabled() {
             return;
         }
-        let Some(path) = setup::autosave_path().filter(|p| p.exists()) else { return };
+        let Some(path) = setup::autosave_path().filter(|p| p.exists()) else {
+            return;
+        };
         match Setup::read(&path) {
             Ok(s) => {
-                if let Err(e) = self.apply_setup(s, Apply { acquisition: true, view: false }) {
+                if let Err(e) = self.apply_setup(
+                    s,
+                    Apply {
+                        acquisition: true,
+                        view: false,
+                    },
+                ) {
                     eprintln!("blinkfeuer: saved setup only partly applied: {e}");
                 }
             }
@@ -299,12 +360,15 @@ impl App {
     }
 
     fn autosave_text(&self) -> String {
-        serde_json::to_string_pretty(&self.current_setup(self.layout_touched, false)).unwrap_or_default()
+        serde_json::to_string_pretty(&self.current_setup(self.layout_touched, false))
+            .unwrap_or_default()
     }
 
     /// Keep the setup on disk (checked every couple of seconds, written when it changed).
     pub(super) fn autosave(&mut self, force: bool) {
-        if !self.autosave_enabled() || (!force && self.autosave_at.elapsed() < Duration::from_secs(2)) {
+        if !self.autosave_enabled()
+            || (!force && self.autosave_at.elapsed() < Duration::from_secs(2))
+        {
             return;
         }
         self.autosave_at = Instant::now();
@@ -315,7 +379,10 @@ impl App {
         if let Some(path) = setup::autosave_path() {
             match setup::write_atomic(&path, text.as_bytes()) {
                 Ok(()) => self.last_autosave = text,
-                Err(e) => eprintln!("blinkfeuer: cannot save the setup to {}: {e}", path.display()),
+                Err(e) => eprintln!(
+                    "blinkfeuer: cannot save the setup to {}: {e}",
+                    path.display()
+                ),
             }
         }
     }
@@ -325,13 +392,19 @@ impl App {
     pub(super) fn ask_file(&mut self, p: Purpose) {
         let (tx, rx) = channel();
         let dir = self.last_dir.clone();
-        let name = self.file.as_ref().and_then(|f| f.file_stem()).map(|s| format!("{}.{}", s.to_string_lossy(), p.filter().1));
+        let name = self
+            .file
+            .as_ref()
+            .and_then(|f| f.file_stem())
+            .map(|s| format!("{}.{}", s.to_string_lossy(), p.filter().1));
         std::thread::spawn(move || {
             let (label, ext) = p.filter();
             let mut d = rfd::FileDialog::new().set_title(p.title());
             d = if p == Purpose::OpenCapture {
                 // Blinkfeuer captures and sigrok sessions (PulseView, sigrok-cli).
-                d.add_filter("Captures (.bfc, .sr)", &["bfc", "sr"]).add_filter(label, &[ext]).add_filter("sigrok session", &["sr"])
+                d.add_filter("Captures (.bfc, .sr)", &["bfc", "sr"])
+                    .add_filter(label, &[ext])
+                    .add_filter("sigrok session", &["sr"])
             } else {
                 d.add_filter(label, &[ext])
             };
@@ -340,7 +413,8 @@ impl App {
                 d = d.set_directory(dir);
             }
             let path = if p.saves() {
-                d.set_file_name(name.unwrap_or_else(|| p.default_name().to_string())).save_file()
+                d.set_file_name(name.unwrap_or_else(|| p.default_name().to_string()))
+                    .save_file()
             } else {
                 d.pick_file()
             };
@@ -352,7 +426,8 @@ impl App {
     fn spawn_job(&mut self, label: String, f: impl FnOnce() -> JobResult + Send + 'static) {
         let (tx, rx) = channel();
         std::thread::spawn(move || {
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| JobResult::Failed("internal error".into()));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+                .unwrap_or_else(|_| JobResult::Failed("internal error".into()));
             let _ = tx.send(r);
         });
         self.job = Some(Job { label, rx });
@@ -380,7 +455,9 @@ impl App {
                     match r {
                         JobResult::Done(msg) => self.notify(msg, false),
                         JobResult::Failed(e) => self.notify(e, true),
-                        JobResult::Loaded { path, store, setup } => self.finish_load(path, *store, setup),
+                        JobResult::Loaded { path, store, setup } => {
+                            self.finish_load(path, *store, setup)
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
@@ -393,17 +470,30 @@ impl App {
     }
 
     pub(super) fn file_chosen(&mut self, p: Purpose, path: PathBuf) {
-        let path = if p.saves() { with_extension(path, p.filter().1) } else { path };
+        let path = if p.saves() {
+            with_extension(path, p.filter().1)
+        } else {
+            path
+        };
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             self.last_dir = Some(dir.to_path_buf());
         }
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         match p {
             Purpose::OpenCapture => {
                 let path2 = path.clone();
-                self.spawn_job(format!("Loading {name}"), move || match load_capture_file(&path2) {
-                    Ok((store, setup)) => JobResult::Loaded { path: path2, store: Box::new(store), setup },
-                    Err(e) => JobResult::Failed(format!("{name}: {e}")),
+                self.spawn_job(format!("Loading {name}"), move || {
+                    match load_capture_file(&path2) {
+                        Ok((store, setup)) => JobResult::Loaded {
+                            path: path2,
+                            store: Box::new(store),
+                            setup,
+                        },
+                        Err(e) => JobResult::Failed(format!("{name}: {e}")),
+                    }
                 });
             }
             Purpose::SaveCapture => {
@@ -411,14 +501,24 @@ impl App {
                 let setup = self.current_setup(true, true).to_json();
                 self.file = Some(path.clone());
                 self.spawn_job(format!("Saving {name}"), move || {
-                    let r = write_via_temp(&path, |w| write_capture(w, &store.read(), &setup).map_err(|e| e.to_string()));
+                    let r = write_via_temp(&path, |w| {
+                        write_capture(w, &store.read(), &setup).map_err(|e| e.to_string())
+                    });
                     match r {
                         Ok(()) => JobResult::Done(format!("saved {}", path.display())),
                         Err(e) => JobResult::Failed(e),
                     }
                 });
             }
-            Purpose::OpenSetup => match Setup::read(&path).and_then(|s| self.apply_setup(s, Apply { acquisition: true, view: false })) {
+            Purpose::OpenSetup => match Setup::read(&path).and_then(|s| {
+                self.apply_setup(
+                    s,
+                    Apply {
+                        acquisition: true,
+                        view: false,
+                    },
+                )
+            }) {
                 Ok(()) => self.notify(format!("loaded setup {name}"), false),
                 Err(e) => self.notify(format!("setup {name}: {e}"), true),
             },
@@ -430,7 +530,9 @@ impl App {
                 let store = self.store.clone();
                 let (range, signals) = self.vcd_selection();
                 self.spawn_job(format!("Exporting {name}"), move || {
-                    let r = write_via_temp(&path, |w| write_vcd(w, &store.read(), range, &signals).map_err(|e| e.to_string()));
+                    let r = write_via_temp(&path, |w| {
+                        write_vcd(w, &store.read(), range, &signals).map_err(|e| e.to_string())
+                    });
                     match r {
                         Ok(()) => JobResult::Done(format!("exported {}", path.display())),
                         Err(e) => JobResult::Failed(e),
@@ -438,11 +540,16 @@ impl App {
                 });
             }
             Purpose::ExportCsv => {
-                let Some(e) = self.decoders.get(self.table.entry) else { return };
+                let Some(e) = self.decoders.get(self.table.entry) else {
+                    return;
+                };
                 let (anns, lane, fmt) = (e.handle.anns.clone(), self.table.lane, e.format);
                 let rate = self.store.read().sample_rate();
                 self.spawn_job(format!("Exporting {name}"), move || {
-                    let r = write_via_temp(&path, |w| decode_ui::write_csv(w, &anns.read().lanes, lane, rate, fmt).map_err(|e| e.to_string()));
+                    let r = write_via_temp(&path, |w| {
+                        decode_ui::write_csv(w, &anns.read().lanes, lane, rate, fmt)
+                            .map_err(|e| e.to_string())
+                    });
                     match r {
                         Ok(()) => JobResult::Done(format!("exported {}", path.display())),
                         Err(e) => JobResult::Failed(e),
@@ -457,7 +564,10 @@ impl App {
         let all = self.store.read().range();
         let range = match (self.markers.m1, self.markers.m2) {
             (Some(a), Some(b)) => {
-                let (lo, hi) = (a.min(b).max(0.0).floor() as u64, b.max(a).max(0.0).ceil() as u64 + 1);
+                let (lo, hi) = (
+                    a.min(b).max(0.0).floor() as u64,
+                    b.max(a).max(0.0).ceil() as u64 + 1,
+                );
                 lo.max(all.start)..hi.min(all.end)
             }
             _ => all,
@@ -467,7 +577,13 @@ impl App {
         if chans.is_empty() {
             chans = (0..n).collect();
         }
-        let signals = chans.into_iter().map(|c| VcdSignal { channel: c as u8, name: self.layout.names[c].clone() }).collect();
+        let signals = chans
+            .into_iter()
+            .map(|c| VcdSignal {
+                channel: c as u8,
+                name: self.layout.names[c].clone(),
+            })
+            .collect();
         (range, signals)
     }
 
@@ -491,11 +607,20 @@ impl App {
         match Setup::from_json(&setup_json) {
             Ok(s) => {
                 view_saved = s.view.is_some();
-                if let Err(e) = self.apply_setup(s, Apply { acquisition: false, view: true }) {
+                if let Err(e) = self.apply_setup(
+                    s,
+                    Apply {
+                        acquisition: false,
+                        view: true,
+                    },
+                ) {
                     self.notify(format!("setup of the file only partly applied: {e}"), true);
                 }
             }
-            Err(e) => self.notify(format!("the setup stored in the file was ignored: {e}"), true),
+            Err(e) => self.notify(
+                format!("the setup stored in the file was ignored: {e}"),
+                true,
+            ),
         }
         if !view_saved {
             self.fit();
@@ -524,30 +649,68 @@ impl App {
         let idle = !self.running() && !self.busy_files();
         let have_data = !self.store.read().is_empty();
         let mut ask: Option<Purpose> = None;
-        if ui.add_enabled(idle, egui::Button::new("Open capture...").shortcut_text("Ctrl+O")).clicked() {
+        if ui
+            .add_enabled(
+                idle,
+                egui::Button::new("Open capture...").shortcut_text("Ctrl+O"),
+            )
+            .clicked()
+        {
             ask = Some(Purpose::OpenCapture);
         }
-        if ui.add_enabled(idle && have_data, egui::Button::new("Save capture").shortcut_text("Ctrl+S")).clicked() {
+        if ui
+            .add_enabled(
+                idle && have_data,
+                egui::Button::new("Save capture").shortcut_text("Ctrl+S"),
+            )
+            .clicked()
+        {
             self.save_capture();
             ui.close_menu();
         }
-        if ui.add_enabled(idle && have_data, egui::Button::new("Save capture as...")).clicked() {
+        if ui
+            .add_enabled(idle && have_data, egui::Button::new("Save capture as..."))
+            .clicked()
+        {
             ask = Some(Purpose::SaveCapture);
         }
         ui.separator();
-        if ui.add_enabled(!self.busy_files(), egui::Button::new("Open setup...")).clicked() {
+        if ui
+            .add_enabled(!self.busy_files(), egui::Button::new("Open setup..."))
+            .clicked()
+        {
             ask = Some(Purpose::OpenSetup);
         }
-        if ui.add_enabled(!self.busy_files(), egui::Button::new("Save setup as...")).on_hover_text("Channels, colors, groups and decoders; also kept automatically between runs").clicked() {
+        if ui
+            .add_enabled(!self.busy_files(), egui::Button::new("Save setup as..."))
+            .on_hover_text(
+                "Channels, colors, groups and decoders; also kept automatically between runs",
+            )
+            .clicked()
+        {
             ask = Some(Purpose::SaveSetup);
         }
         ui.separator();
         let between = self.markers.m1.is_some() && self.markers.m2.is_some();
-        let vcd = if between { "Export VCD (M1 to M2)..." } else { "Export VCD..." };
-        if ui.add_enabled(idle && have_data, egui::Button::new(vcd)).clicked() {
+        let vcd = if between {
+            "Export VCD (M1 to M2)..."
+        } else {
+            "Export VCD..."
+        };
+        if ui
+            .add_enabled(idle && have_data, egui::Button::new(vcd))
+            .clicked()
+        {
             ask = Some(Purpose::ExportVcd);
         }
-        if ui.add_enabled(idle && !self.decoders.is_empty(), egui::Button::new("Export decoded items (CSV)...")).on_hover_text("The decoder and lane shown in the annotation table").clicked() {
+        if ui
+            .add_enabled(
+                idle && !self.decoders.is_empty(),
+                egui::Button::new("Export decoded items (CSV)..."),
+            )
+            .on_hover_text("The decoder and lane shown in the annotation table")
+            .clicked()
+        {
             ask = Some(Purpose::ExportCsv);
         }
         ui.separator();

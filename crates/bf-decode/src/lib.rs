@@ -147,12 +147,34 @@ impl Annotation {
     /// Text for the annotation.
     pub fn label(&self, fmt: Format) -> String {
         let mut s = match self.kind {
-            Kind::Start => return if self.flags & flag::REPEATED != 0 { "Sr".into() } else { "S".into() },
+            Kind::Start => {
+                return if self.flags & flag::REPEATED != 0 {
+                    "Sr".into()
+                } else {
+                    "S".into()
+                }
+            }
             Kind::Stop => return "P".into(),
-            Kind::Frame => return format!("{} word{}", self.value, if self.value == 1 { "" } else { "s" }),
-            Kind::Telegram => return format!("{} byte{}", self.value, if self.value == 1 { "" } else { "s" }),
+            Kind::Frame => {
+                return format!(
+                    "{} word{}",
+                    self.value,
+                    if self.value == 1 { "" } else { "s" }
+                )
+            }
+            Kind::Telegram => {
+                return format!(
+                    "{} byte{}",
+                    self.value,
+                    if self.value == 1 { "" } else { "s" }
+                )
+            }
             Kind::Address => {
-                let rw = if self.flags & flag::READ != 0 { "R" } else { "W" };
+                let rw = if self.flags & flag::READ != 0 {
+                    "R"
+                } else {
+                    "W"
+                };
                 format!("{} {}", format_value(self.value, 7, Format::Hex), rw)
             }
             Kind::Data => format_value(self.value, self.bits, fmt),
@@ -184,7 +206,9 @@ pub struct AnnStore {
 
 impl AnnStore {
     pub fn new(lanes: usize) -> Self {
-        Self { lanes: vec![Vec::new(); lanes] }
+        Self {
+            lanes: vec![Vec::new(); lanes],
+        }
     }
 
     pub fn push(&mut self, a: Annotation) {
@@ -207,7 +231,9 @@ impl AnnStore {
 
     /// Annotations of `lane` that overlap `range`.
     pub fn visible(&self, lane: usize, range: Range<u64>) -> &[Annotation] {
-        let Some(l) = self.lanes.get(lane) else { return &[] };
+        let Some(l) = self.lanes.get(lane) else {
+            return &[];
+        };
         let lo = l.partition_point(|a| a.end <= range.start);
         let hi = l.partition_point(|a| a.start < range.end);
         &l[lo..hi.max(lo)]
@@ -257,12 +283,24 @@ mod tests {
     use super::*;
 
     fn ch(start: u64, value: u32) -> Annotation {
-        Annotation { start, end: start + 10, value, lane: 0, kind: Kind::Data, bits: 8, flags: 0 }
+        Annotation {
+            start,
+            end: start + 10,
+            value,
+            lane: 0,
+            kind: Kind::Data,
+            bits: 8,
+            flags: 0,
+        }
     }
 
     #[test]
     fn telegram_text_shows_ascii_with_escapes() {
-        let c: Vec<_> = b"Hi!\r\n\x01".iter().enumerate().map(|(i, &b)| ch(i as u64 * 20, b as u32)).collect();
+        let c: Vec<_> = b"Hi!\r\n\x01"
+            .iter()
+            .enumerate()
+            .map(|(i, &b)| ch(i as u64 * 20, b as u32))
+            .collect();
         assert_eq!(telegram_text(&c, Format::Ascii, 100), "Hi!\\r\\n\\x01");
         assert_eq!(telegram_text(&c[..2], Format::Hex, 100), "48 69");
         assert_eq!(telegram_text(&c[..2], Format::Dec, 100), "72 105");
@@ -273,7 +311,15 @@ mod tests {
     #[test]
     fn telegram_chars_are_found_by_time() {
         let c: Vec<_> = (0..10u64).map(|i| ch(i * 20, 65 + i as u32)).collect();
-        let t = Annotation { start: 40, end: 130, value: 5, lane: 1, kind: Kind::Telegram, bits: 0, flags: 0 };
+        let t = Annotation {
+            start: 40,
+            end: 130,
+            value: 5,
+            lane: 1,
+            kind: Kind::Telegram,
+            bits: 0,
+            flags: 0,
+        };
         let inside: Vec<u32> = telegram_chars(&c, &t).iter().map(|a| a.value).collect();
         assert_eq!(inside, vec![67, 68, 69, 70, 71]);
         assert_eq!(t.label(Format::Hex), "5 bytes");

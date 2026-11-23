@@ -83,11 +83,14 @@ impl Generator {
         let uart = if p >= UART_MESSAGE.len() as u64 * UART_SLOTS_PER_CHAR {
             true
         } else {
-            let (c, s) = (UART_MESSAGE[(p / UART_SLOTS_PER_CHAR) as usize], p % UART_SLOTS_PER_CHAR);
+            let (c, s) = (
+                UART_MESSAGE[(p / UART_SLOTS_PER_CHAR) as usize],
+                p % UART_SLOTS_PER_CHAR,
+            );
             match s {
-                0 => false,                   // start bit
+                0 => false,                       // start bit
                 1..=8 => (c >> (s - 1)) & 1 != 0, // data, LSB first
-                _ => true,                    // stop and idle
+                _ => true,                        // stop and idle
             }
         };
         set(ch::UART, uart);
@@ -145,15 +148,30 @@ pub struct SimDevice {
 impl SimDevice {
     /// `realtime`: pace the stream at the configured samplerate (as far as the CPU allows).
     pub fn new(realtime: bool) -> Self {
-        let rates: Vec<f64> =
-            [5.0, 10.0, 20.0, 25.0, 40.0, 50.0, 80.0, 100.0, 160.0, 200.0].iter().map(|m| m * 1e6).collect();
+        let rates: Vec<f64> = [5.0, 10.0, 20.0, 25.0, 40.0, 50.0, 80.0, 100.0, 160.0, 200.0]
+            .iter()
+            .map(|m| m * 1e6)
+            .collect();
         Self {
-            info: DeviceInfo { id: "sim:0".into(), name: "Simulated SLogic16U3".into(), backend: "sim" },
+            info: DeviceInfo {
+                id: "sim:0".into(),
+                name: "Simulated SLogic16U3".into(),
+                backend: "sim",
+            },
             caps: Capabilities {
                 modes: vec![
-                    ChannelMode { channels: 4, max_rate: 800e6 },
-                    ChannelMode { channels: 8, max_rate: 400e6 },
-                    ChannelMode { channels: 16, max_rate: 200e6 },
+                    ChannelMode {
+                        channels: 4,
+                        max_rate: 800e6,
+                    },
+                    ChannelMode {
+                        channels: 8,
+                        max_rate: 400e6,
+                    },
+                    ChannelMode {
+                        channels: 16,
+                        max_rate: 200e6,
+                    },
                 ],
                 rates,
                 patterns: vec![Pattern::Inputs, Pattern::Counter, Pattern::Generator],
@@ -220,7 +238,11 @@ impl Stream for SimStream {
                 avail = avail.min(l - self.produced);
             }
             // In real time wait for ~1 ms worth of samples to keep the buffer rate sane.
-            let min = if self.realtime { ((self.cfg.sample_rate / 1000.0) as u64).min(BUFFER_SAMPLES) } else { 1 };
+            let min = if self.realtime {
+                ((self.cfg.sample_rate / 1000.0) as u64).min(BUFFER_SAMPLES)
+            } else {
+                1
+            };
             if avail >= min.max(align) || (avail > 0 && Some(self.produced + avail) == self.limit) {
                 break avail / align * align;
             }
@@ -242,7 +264,11 @@ impl Stream for SimStream {
 
     fn stop(&mut self) -> Result<StreamReport, DeviceError> {
         self.stopped = true;
-        Ok(StreamReport { bytes: self.bytes, overflow: false, note: None })
+        Ok(StreamReport {
+            bytes: self.bytes,
+            overflow: false,
+            note: None,
+        })
     }
 }
 
@@ -302,7 +328,11 @@ mod tests {
         // Data bits of the first character, least significant first, in slots 1 to 8.
         let slot = |s: u64| (s as f64 * 1e9 / UART_BAUD) as u64 + 100;
         for k in 0..8u64 {
-            assert_eq!(u32::from(g.at_ns(slot(1 + k)) >> ch::UART & 1), u32::from((UART_MESSAGE[0] >> k) & 1), "data bit {k}");
+            assert_eq!(
+                u32::from(g.at_ns(slot(1 + k)) >> ch::UART & 1),
+                u32::from((UART_MESSAGE[0] >> k) & 1),
+                "data bit {k}"
+            );
         }
         assert_eq!(g.at_ns(slot(10)) >> ch::UART & 1, 1); // stop bit
     }
@@ -312,7 +342,7 @@ mod tests {
         let g = Generator::new();
         assert_eq!(g.at_ns(1_000) >> ch::SPI_CS & 1, 1); // idle
         assert_eq!(g.at_ns(6_000) >> ch::SPI_CS & 1, 0); // active
-        // First bit of 0xA5 is 1, second 0.
+                                                         // First bit of 0xA5 is 1, second 0.
         assert_eq!(g.at_ns(5_100) >> ch::SPI_MOSI & 1, 1);
         assert_eq!(g.at_ns(6_100) >> ch::SPI_MOSI & 1, 0);
         // SCK low in the first half of a bit, high in the second.
@@ -327,7 +357,11 @@ mod tests {
         let mut prev = g.at_ns(0);
         for t in (0..I2C_PERIOD_NS).step_by(100) {
             let w = g.at_ns(t);
-            let (scl, sda, psda) = (w >> ch::I2C_SCL & 1, w >> ch::I2C_SDA & 1, prev >> ch::I2C_SDA & 1);
+            let (scl, sda, psda) = (
+                w >> ch::I2C_SCL & 1,
+                w >> ch::I2C_SDA & 1,
+                prev >> ch::I2C_SDA & 1,
+            );
             if scl == 1 && psda == 1 && sda == 0 {
                 starts += 1;
             }
@@ -350,7 +384,9 @@ mod tests {
     fn realtime_delivers_data_above_the_buffer_size_rate() {
         // 100 MHz > BUFFER_SAMPLES per millisecond: must not wait for a buffer that can never fill.
         let mut dev = SimDevice::new(true);
-        let mut st = dev.start(&cfg(16, 100e6, 1_000_000, Pattern::Counter)).unwrap();
+        let mut st = dev
+            .start(&cfg(16, 100e6, 1_000_000, Pattern::Counter))
+            .unwrap();
         let t0 = Instant::now();
         let mut got = 0usize;
         while got < 100_000 && t0.elapsed() < Duration::from_secs(2) {

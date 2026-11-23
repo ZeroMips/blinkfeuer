@@ -41,7 +41,14 @@ pub enum Cond {
 }
 
 impl Cond {
-    pub const ALL: [Cond; 6] = [Cond::X, Cond::Low, Cond::High, Cond::Rising, Cond::Falling, Cond::Either];
+    pub const ALL: [Cond; 6] = [
+        Cond::X,
+        Cond::Low,
+        Cond::High,
+        Cond::Rising,
+        Cond::Falling,
+        Cond::Either,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -80,7 +87,13 @@ pub struct Trigger {
 impl Trigger {
     /// `conds[c]` is the condition of channel `c` (missing channels are don't-care).
     pub fn new(conds: &[Cond]) -> Self {
-        let mut t = Self { level_mask: 0, level_value: 0, rising: 0, falling: 0, either: 0 };
+        let mut t = Self {
+            level_mask: 0,
+            level_value: 0,
+            rising: 0,
+            falling: 0,
+            either: 0,
+        };
         for (c, cond) in conds.iter().enumerate().take(32) {
             let bit = 1u32 << c;
             match cond {
@@ -115,15 +128,22 @@ impl Trigger {
     /// Index of the first sample of `words` that satisfies the trigger; `prev` is the sample before
     /// `words[0]`.
     pub fn find(&self, prev: u32, words: &[u32]) -> Option<usize> {
-        let Some(&first) = words.first() else { return None };
+        let Some(&first) = words.first() else {
+            return None;
+        };
         if self.matches(prev, first) {
             return Some(0);
         }
         // Level-only triggers need no previous sample: a tight loop the compiler can unroll.
         if (self.rising | self.falling | self.either) == 0 {
-            return words.iter().position(|&w| (w & self.level_mask) == self.level_value);
+            return words
+                .iter()
+                .position(|&w| (w & self.level_mask) == self.level_value);
         }
-        words.windows(2).position(|w| self.matches(w[0], w[1])).map(|i| i + 1)
+        words
+            .windows(2)
+            .position(|w| self.matches(w[0], w[1]))
+            .map(|i| i + 1)
     }
 }
 
@@ -157,9 +177,15 @@ mod tests {
         assert!(e.matches(0b100, 0b000) && e.matches(0b000, 0b100) && !e.matches(0b100, 0b100));
 
         // All conditions together: CH0 rising while CH1 is high and CH2 falls.
-        let all = Trigger::new(&conds(&[(0, Cond::Rising), (1, Cond::High), (2, Cond::Falling)]));
+        let all = Trigger::new(&conds(&[
+            (0, Cond::Rising),
+            (1, Cond::High),
+            (2, Cond::Falling),
+        ]));
         assert!(all.matches(0b100, 0b011));
-        assert!(!all.matches(0b100, 0b001) && !all.matches(0b000, 0b011) && !all.matches(0b101, 0b011));
+        assert!(
+            !all.matches(0b100, 0b001) && !all.matches(0b000, 0b011) && !all.matches(0b101, 0b011)
+        );
     }
 
     #[test]
@@ -221,7 +247,14 @@ mod tests {
     #[ignore = "benchmark: cargo test -p bf-core --release -- --ignored --nocapture"]
     fn scan_speed() {
         let words: Vec<u32> = (0..(1u32 << 24)).map(|i| i & 0x7fff).collect();
-        for (name, spec) in [("level", vec![(15, Cond::High)]), ("edge", vec![(15, Cond::Rising)]), ("mixed", vec![(14, Cond::High), (3, Cond::Falling), (15, Cond::Either)])] {
+        for (name, spec) in [
+            ("level", vec![(15, Cond::High)]),
+            ("edge", vec![(15, Cond::Rising)]),
+            (
+                "mixed",
+                vec![(14, Cond::High), (3, Cond::Falling), (15, Cond::Either)],
+            ),
+        ] {
             let mut v = vec![Cond::X; 16];
             for (c, k) in spec {
                 v[c] = k;
@@ -233,7 +266,10 @@ mod tests {
                 hits += t.find(0, &words).is_some() as u64;
             }
             let s = t0.elapsed().as_secs_f64();
-            println!("{name}: {:.2} GSa/s ({hits})", 8.0 * words.len() as f64 / s / 1e9);
+            println!(
+                "{name}: {:.2} GSa/s ({hits})",
+                8.0 * words.len() as f64 / s / 1e9
+            );
         }
     }
 }

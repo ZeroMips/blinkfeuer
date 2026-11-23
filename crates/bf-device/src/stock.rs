@@ -6,8 +6,8 @@
 //! of the 16U3 stream are a partial word and are dropped.
 
 use crate::{
-    Capabilities, CaptureConfig, ChannelMode, Device, DeviceError, DeviceInfo, Pattern, ReadResult, Stream,
-    StreamReport,
+    Capabilities, CaptureConfig, ChannelMode, Device, DeviceError, DeviceInfo, Pattern, ReadResult,
+    Stream, StreamReport,
 };
 use nusb::transfer::{Bulk, ControlIn, ControlOut, ControlType, In, Recipient, TransferError};
 use nusb::{Endpoint, Interface, MaybeFuture, Speed};
@@ -55,15 +55,21 @@ fn aux_open<R: RegIo>(r: &mut R, cmd: u32) -> Result<usize, DeviceError> {
             return if (1..=16).contains(&words) {
                 Ok(words)
             } else {
-                Err(DeviceError::Usb(format!("AUX command {cmd}: bad payload length {words}")))
+                Err(DeviceError::Usb(format!(
+                    "AUX command {cmd}: bad payload length {words}"
+                )))
             };
         }
     }
-    Err(DeviceError::Usb(format!("AUX command {cmd}: device not ready")))
+    Err(DeviceError::Usb(format!(
+        "AUX command {cmd}: device not ready"
+    )))
 }
 
 fn aux_read<R: RegIo>(r: &mut R, words: usize) -> Result<Vec<u32>, DeviceError> {
-    (0..words).map(|i| r.read32(R_AUX_PAYLOAD + 4 * i as u16)).collect()
+    (0..words)
+        .map(|i| r.read32(R_AUX_PAYLOAD + 4 * i as u16))
+        .collect()
 }
 
 /// One single-word AUX block: write command, read the old payload, write word 0, confirm by reading back.
@@ -73,13 +79,19 @@ fn aux_set_word<R: RegIo>(r: &mut R, cmd: u32, value: u32, what: &str) -> Result
     r.write32(R_AUX_PAYLOAD, value)?;
     let back = r.read32(R_AUX_PAYLOAD)?;
     if back != value {
-        return Err(DeviceError::Usb(format!("{what}: wrote {value:#x}, device reports {back:#x}")));
+        return Err(DeviceError::Usb(format!(
+            "{what}: wrote {value:#x}, device reports {back:#x}"
+        )));
     }
     Ok(())
 }
 
 pub fn set_channels<R: RegIo>(r: &mut R, channels: u8) -> Result<(), DeviceError> {
-    let mask = if channels >= 32 { u32::MAX } else { (1u32 << channels) - 1 };
+    let mask = if channels >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << channels) - 1
+    };
     aux_set_word(r, AUX_CHANNEL, mask, "channel mask")
 }
 
@@ -91,7 +103,9 @@ pub fn set_samplerate<R: RegIo>(r: &mut R, rate_hz: f64) -> Result<(), DeviceErr
     }
     let words = aux_open(r, AUX_RATE)?;
     if words < 2 {
-        return Err(DeviceError::Usb(format!("samplerate payload has {words} words, expected 2")));
+        return Err(DeviceError::Usb(format!(
+            "samplerate payload has {words} words, expected 2"
+        )));
     }
     let mut p = aux_read(r, words)?;
     for _ in 0..32 {
@@ -102,7 +116,9 @@ pub fn set_samplerate<R: RegIo>(r: &mut R, rate_hz: f64) -> Result<(), DeviceErr
             r.write32(R_AUX_PAYLOAD + 4, divider)?;
             let back = r.read32(R_AUX_PAYLOAD + 4)?;
             if back != divider {
-                return Err(DeviceError::Usb(format!("samplerate: wrote divider {divider}, device reports {back}")));
+                return Err(DeviceError::Usb(format!(
+                    "samplerate: wrote divider {divider}, device reports {back}"
+                )));
             }
             return Ok(());
         }
@@ -113,7 +129,10 @@ pub fn set_samplerate<R: RegIo>(r: &mut R, rate_hz: f64) -> Result<(), DeviceErr
             break; // the device did not advance: end of the table
         }
     }
-    Err(DeviceError::Config(format!("no base clock yields {} MHz", rate_hz / 1e6)))
+    Err(DeviceError::Config(format!(
+        "no base clock yields {} MHz",
+        rate_hz / 1e6
+    )))
 }
 
 /// DAC code for a threshold voltage (10 bit against a 1.6 V reference): `V / 3.33 / 2 * 1024`, rounded.
@@ -126,7 +145,9 @@ pub fn pattern_code(p: Pattern) -> Result<u32, DeviceError> {
         Pattern::Inputs => Ok(0),
         Pattern::Counter => Ok(1),
         Pattern::Emulation => Ok(2),
-        Pattern::Generator => Err(DeviceError::Config("the blinkfeuer generator pattern is simulator only".into())),
+        Pattern::Generator => Err(DeviceError::Config(
+            "the blinkfeuer generator pattern is simulator only".into(),
+        )),
     }
 }
 
@@ -176,7 +197,12 @@ pub fn plan_ring(rate: f64, channels: u8, limit_bytes: Option<u64>) -> RingPlan 
 }
 
 /// [`plan_ring`] for a stream that has `first_drop` extra bytes at its head.
-pub fn plan_ring_with(rate: f64, channels: u8, limit_bytes: Option<u64>, first_drop: usize) -> RingPlan {
+pub fn plan_ring_with(
+    rate: f64,
+    channels: u8,
+    limit_bytes: Option<u64>,
+    first_drop: usize,
+) -> RingPlan {
     let byte_rate = rate * channels as f64 / 8.0;
     let ideal = (byte_rate * 0.005) as usize;
     let mut xfer = ideal.clamp(32 * KIB, 2 * MIB).div_ceil(32 * KIB) * 32 * KIB;
@@ -200,7 +226,10 @@ pub struct Accounting {
 
 impl Accounting {
     pub fn new(first_drop: usize, limit_bytes: Option<u64>) -> Self {
-        Self { drop_left: first_drop, remaining: limit_bytes }
+        Self {
+            drop_left: first_drop,
+            remaining: limit_bytes,
+        }
     }
 
     /// The part of `data` to deliver, and whether the capture is complete after it.
@@ -253,9 +282,15 @@ impl RegIo for UsbRegs {
             )
             .wait()
             .map_err(|e| transfer_err(&e))?;
-        let b: [u8; 4] = data.get(..4).and_then(|s| s.try_into().ok()).ok_or_else(|| {
-            DeviceError::Usb(format!("register {addr:#x}: short read ({} bytes)", data.len()))
-        })?;
+        let b: [u8; 4] = data
+            .get(..4)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| {
+                DeviceError::Usb(format!(
+                    "register {addr:#x}: short read ({} bytes)",
+                    data.len()
+                ))
+            })?;
         Ok(u32::from_le_bytes(b))
     }
 
@@ -306,8 +341,12 @@ pub struct StockDevice {
 impl StockDevice {
     /// Descriptions of the attached analyzers (without opening them).
     pub fn available() -> Vec<DeviceInfo> {
-        let Ok(list) = nusb::list_devices().wait() else { return Vec::new() };
-        list.filter(|d| d.vendor_id() == VID && d.product_id() == PID_16U3).map(|d| describe(&d)).collect()
+        let Ok(list) = nusb::list_devices().wait() else {
+            return Vec::new();
+        };
+        list.filter(|d| d.vendor_id() == VID && d.product_id() == PID_16U3)
+            .map(|d| describe(&d))
+            .collect()
     }
 
     /// Open the first attached analyzer and bring it to a known idle state (stop, drain, reset).
@@ -323,15 +362,27 @@ impl StockDevice {
             })?;
         let info = describe(&di);
         let usb3 = !matches!(di.speed(), Some(Speed::Low | Speed::Full | Speed::High));
-        let dev = di.open().wait().map_err(|e| usb_err("opening the device", e))?;
-        let iface = dev.claim_interface(0).wait().map_err(|e| usb_err("claiming interface 0", e))?;
-        let mut regs = UsbRegs { iface: iface.clone() };
+        let dev = di
+            .open()
+            .wait()
+            .map_err(|e| usb_err("opening the device", e))?;
+        let iface = dev
+            .claim_interface(0)
+            .wait()
+            .map_err(|e| usb_err("claiming interface 0", e))?;
+        let mut regs = UsbRegs {
+            iface: iface.clone(),
+        };
         regs.write32(R_CTRL, 0)?;
         if let Ok(mut ep) = iface.endpoint::<Bulk, In>(EP_IN) {
             drain(&mut ep);
         }
         reset(&mut regs)?;
-        Ok(Self { iface, info, caps: capabilities(usb3) })
+        Ok(Self {
+            iface,
+            info,
+            caps: capabilities(usb3),
+        })
     }
 }
 
@@ -356,11 +407,18 @@ fn describe(d: &nusb::DeviceInfo) -> DeviceInfo {
 pub fn capabilities(usb3: bool) -> Capabilities {
     let cap = |ch: u8, native: f64| ChannelMode {
         channels: ch,
-        max_rate: if usb3 { native } else { native.min(320e6 / ch as f64) },
+        max_rate: if usb3 {
+            native
+        } else {
+            native.min(320e6 / ch as f64)
+        },
     };
     Capabilities {
         modes: vec![cap(4, 800e6), cap(8, 400e6), cap(16, 200e6)],
-        rates: [1e6, 2e6, 5e6, 10e6, 20e6, 25e6, 40e6, 50e6, 80e6, 100e6, 160e6, 200e6, 400e6, 800e6].to_vec(),
+        rates: [
+            1e6, 2e6, 5e6, 10e6, 20e6, 25e6, 40e6, 50e6, 80e6, 100e6, 160e6, 200e6, 400e6, 800e6,
+        ]
+        .to_vec(),
         patterns: vec![Pattern::Inputs, Pattern::Counter, Pattern::Emulation],
         threshold: Some((0.0, 3.3, 0.05)),
     }
@@ -384,7 +442,9 @@ impl Device for StockDevice {
         let limit_bytes = cfg.limit_samples.map(|n| cfg.channels.bytes_for(n));
         let plan = plan_ring(cfg.sample_rate, cfg.channels.get(), limit_bytes);
         let mut s = StockStream {
-            regs: UsbRegs { iface: self.iface.clone() },
+            regs: UsbRegs {
+                iface: self.iface.clone(),
+            },
             ep,
             cfg: cfg.clone(),
             plan,
@@ -429,7 +489,10 @@ impl StockStream {
         if with_reset {
             reset(&mut self.regs)?;
         }
-        self.ep.clear_halt().wait().map_err(|e| usb_err("clearing endpoint halt", e))?;
+        self.ep
+            .clear_halt()
+            .wait()
+            .map_err(|e| usb_err("clearing endpoint halt", e))?;
         configure(&mut self.regs, &self.cfg)?;
         self.fill_ring();
         self.regs.write32(R_CTRL, CTRL_RUN)?;
@@ -454,8 +517,16 @@ impl StockStream {
         while self.ep.pending() > 0 {
             let _ = self.ep.wait_next_complete(Duration::from_secs(1));
         }
-        self.acc = Accounting::new(FIRST_DROP_BYTES, self.cfg.limit_samples.map(|n| self.cfg.channels.bytes_for(n)));
-        self.to_submit = self.cfg.limit_samples.map(|n| self.cfg.channels.bytes_for(n) + FIRST_DROP_BYTES as u64);
+        self.acc = Accounting::new(
+            FIRST_DROP_BYTES,
+            self.cfg
+                .limit_samples
+                .map(|n| self.cfg.channels.bytes_for(n)),
+        );
+        self.to_submit = self
+            .cfg
+            .limit_samples
+            .map(|n| self.cfg.channels.bytes_for(n) + FIRST_DROP_BYTES as u64);
         self.begin(true)
     }
 }
@@ -481,7 +552,9 @@ impl Stream for StockStream {
             let grace = Duration::from_secs_f64((fill / rate * 4.0).max(1.5));
             if !self.started && self.t_run.elapsed() > grace {
                 if self.rearmed {
-                    return Err(DeviceError::Stalled("no data after RUN (start sequence repeated once)".into()));
+                    return Err(DeviceError::Stalled(
+                        "no data after RUN (start sequence repeated once)".into(),
+                    ));
                 }
                 self.rearm()?;
             }
@@ -514,7 +587,11 @@ impl Stream for StockStream {
         self.report.bytes += out.len() as u64;
         self.finished = complete;
         if out.is_empty() {
-            return Ok(if complete { ReadResult::Ended } else { ReadResult::Timeout });
+            return Ok(if complete {
+                ReadResult::Ended
+            } else {
+                ReadResult::Timeout
+            });
         }
         Ok(ReadResult::Data(out.to_vec()))
     }
@@ -565,12 +642,18 @@ mod tests {
 
     impl Fake {
         fn new() -> Self {
-            Fake { ops: Vec::new(), cmd: 0, payload: [0; 4], bases: vec![250, 800] }
+            Fake {
+                ops: Vec::new(),
+                cmd: 0,
+                payload: [0; 4],
+                bases: vec![250, 800],
+            }
         }
 
         fn sync_rate(&mut self) {
             let idx = (self.payload[0] & 0xFFFF) as usize;
-            self.payload[0] = (self.payload[0] & 0xFFFF) | (self.bases.get(idx).copied().unwrap_or(0) << 16);
+            self.payload[0] =
+                (self.payload[0] & 0xFFFF) | (self.bases.get(idx).copied().unwrap_or(0) << 16);
         }
     }
 
@@ -644,7 +727,7 @@ mod tests {
                 (R_AUX_PAYLOAD, 0x0000_FFFF),
                 (R_AUX, AUX_RATE),
                 (R_AUX_PAYLOAD, 250 << 16 | 1), // base index 0 -> 1 (the 250 MHz base is not a multiple of 200 MHz)
-                (R_AUX_PAYLOAD + 4, 3),       // 800 MHz / 200 MHz - 1
+                (R_AUX_PAYLOAD + 4, 3),         // 800 MHz / 200 MHz - 1
                 (R_AUX, AUX_VREF),
                 (R_AUX_PAYLOAD, 261),
                 (R_AUX, AUX_TEST),
@@ -664,7 +747,13 @@ mod tests {
         let kinds: Vec<(bool, u16)> = f.ops.iter().map(|o| (o.0, o.1)).collect();
         assert_eq!(
             kinds,
-            vec![(true, R_AUX), (false, R_AUX), (false, R_AUX_PAYLOAD), (true, R_AUX_PAYLOAD), (false, R_AUX_PAYLOAD)]
+            vec![
+                (true, R_AUX),
+                (false, R_AUX),
+                (false, R_AUX_PAYLOAD),
+                (true, R_AUX_PAYLOAD),
+                (false, R_AUX_PAYLOAD)
+            ]
         );
         assert_eq!(f.payload[0], 0xFF);
     }
@@ -723,7 +812,13 @@ mod tests {
         // Above 2 MiB worth of 5 ms the size is capped.
         assert_eq!(plan_ring(800e6, 16, None).xfer, 2 * MIB);
         // Slow captures: the 32 KiB floor, a full ring of 16.
-        assert_eq!(plan_ring(1e6, 8, None), RingPlan { xfer: 32 * KIB, count: 16 });
+        assert_eq!(
+            plan_ring(1e6, 8, None),
+            RingPlan {
+                xfer: 32 * KIB,
+                count: 16
+            }
+        );
         // Always 32 KiB aligned and at least 4 in flight for unlimited captures.
         for (r, c) in [(10e6, 16), (100e6, 16), (800e6, 4), (50e6, 8)] {
             let p = plan_ring(r, c, None);
@@ -732,7 +827,13 @@ mod tests {
         }
         // A tiny finite capture needs one small transfer.
         let p = plan_ring(10e6, 16, Some(2000));
-        assert_eq!(p, RingPlan { xfer: 2048, count: 1 });
+        assert_eq!(
+            p,
+            RingPlan {
+                xfer: 2048,
+                count: 1
+            }
+        );
         // A finite capture never keeps more transfers than it needs.
         let p = plan_ring(10e6, 16, Some(100_000));
         assert!(p.count * p.xfer >= 100_004 && p.count * p.xfer < 100_004 + p.xfer);

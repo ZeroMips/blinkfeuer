@@ -11,7 +11,10 @@ pub struct Wave {
 
 impl Wave {
     pub fn new(rate: f64, len: usize, init: u32) -> Self {
-        Self { rate, samples: vec![init; len] }
+        Self {
+            rate,
+            samples: vec![init; len],
+        }
     }
 
     /// Set channel `ch` to `level` for samples `from..to` (clamped to the waveform).
@@ -61,7 +64,14 @@ impl Wave {
 
     /// One SPI transaction: CS asserted, `words` shifted out on MOSI (and `miso` shifted in, if not
     /// empty), CS released. `half` is half a clock period in samples. Returns the end sample.
-    pub fn spi(&mut self, cfg: &SpiConfig, start: u64, half: u64, mosi: &[u32], miso: &[u32]) -> u64 {
+    pub fn spi(
+        &mut self,
+        cfg: &SpiConfig,
+        start: u64,
+        half: u64,
+        mosi: &[u32],
+        miso: &[u32],
+    ) -> u64 {
         let idle = cfg.cpol;
         let cs_on = !cfg.cs_active_low;
         let words = mosi.len().max(miso.len());
@@ -75,7 +85,11 @@ impl Wave {
             for i in 0..bits {
                 let shift = if cfg.msb_first { bits - 1 - i } else { i };
                 let p = t + (w as u64 * bits + i) * 2 * half;
-                let (d0, d1) = if cfg.cpha { (p + half, p + 3 * half) } else { (p, p + 2 * half) };
+                let (d0, d1) = if cfg.cpha {
+                    (p + half, p + 3 * half)
+                } else {
+                    (p, p + 2 * half)
+                };
                 if let Some(c) = cfg.mosi {
                     let v = mosi.get(w).map_or(false, |m| (m >> shift) & 1 != 0);
                     self.set(c, d0, d1, v);
@@ -112,7 +126,11 @@ impl Wave {
     pub fn i2c_byte(&mut self, scl: u8, sda: u8, t: u64, q: u64, byte: u8, nak: bool) -> u64 {
         let mut t = t;
         for k in (0..9).rev() {
-            let d = if k == 0 { nak } else { (byte >> (k - 1)) & 1 != 0 };
+            let d = if k == 0 {
+                nak
+            } else {
+                (byte >> (k - 1)) & 1 != 0
+            };
             self.set(scl, t, t + q, false);
             self.set(sda, t, t + 4 * q, d);
             self.set(scl, t + q, t + 3 * q, true);

@@ -18,7 +18,13 @@ pub enum Parity {
 }
 
 impl Parity {
-    pub const ALL: [Parity; 5] = [Parity::None, Parity::Even, Parity::Odd, Parity::Mark, Parity::Space];
+    pub const ALL: [Parity; 5] = [
+        Parity::None,
+        Parity::Even,
+        Parity::Odd,
+        Parity::Mark,
+        Parity::Space,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -100,7 +106,14 @@ pub struct Uart {
 
 impl Uart {
     pub fn new(cfg: UartConfig) -> Self {
-        Self { cfg, tele: None, bit: 0.0, primed: false, level: true, frame: None }
+        Self {
+            cfg,
+            tele: None,
+            bit: 0.0,
+            primed: false,
+            level: true,
+            frame: None,
+        }
     }
 
     pub fn config(&self) -> &UartConfig {
@@ -113,7 +126,15 @@ impl Uart {
 
     fn close_telegram(&mut self, out: &mut Vec<Annotation>) {
         if let Some(t) = self.tele.take() {
-            out.push(Annotation { start: t.start, end: t.end, value: t.count, lane: 1, kind: Kind::Telegram, bits: 0, flags: t.flags });
+            out.push(Annotation {
+                start: t.start,
+                end: t.end,
+                value: t.count,
+                lane: 1,
+                kind: Kind::Telegram,
+                bits: 0,
+                flags: t.flags,
+            });
         }
     }
 
@@ -123,7 +144,11 @@ impl Uart {
             return;
         }
         let gap = (self.cfg.telegram_gap * self.bit) as u64;
-        if self.tele.as_ref().is_some_and(|t| start.saturating_sub(t.end) >= gap) {
+        if self
+            .tele
+            .as_ref()
+            .is_some_and(|t| start.saturating_sub(t.end) >= gap)
+        {
             self.close_telegram(out);
         }
         let flags = flags & flag::ERROR;
@@ -133,7 +158,14 @@ impl Uart {
                 t.count += 1;
                 t.flags |= flags;
             }
-            None => self.tele = Some(Tele { start, end, count: 1, flags }),
+            None => {
+                self.tele = Some(Tele {
+                    start,
+                    end,
+                    count: 1,
+                    flags,
+                })
+            }
         }
         if self.cfg.telegram_lf && value == 0x0A {
             self.close_telegram(out);
@@ -145,7 +177,11 @@ impl Uart {
     fn flush_telegram(&mut self, horizon: u64, out: &mut Vec<Annotation>) {
         let until = self.frame.as_ref().map_or(horizon, |f| f.t0.min(horizon));
         let gap = (self.cfg.telegram_gap * self.bit) as u64;
-        if self.tele.as_ref().is_some_and(|t| until.saturating_sub(t.end) >= gap) {
+        if self
+            .tele
+            .as_ref()
+            .is_some_and(|t| until.saturating_sub(t.end) >= gap)
+        {
             self.close_telegram(out);
         }
     }
@@ -194,7 +230,14 @@ impl Decoder for Uart {
         }
         self.advance(t, out);
         if self.frame.is_none() && self.level && !lvl {
-            self.frame = Some(Frame { t0: t, j: 0, value: 0, ones: 0, parity_bit: false, flags: 0 });
+            self.frame = Some(Frame {
+                t0: t,
+                j: 0,
+                value: 0,
+                ones: 0,
+                parity_bit: false,
+                flags: 0,
+            });
         }
         self.level = lvl;
     }
@@ -256,8 +299,20 @@ impl Uart {
                         flags |= flag::BREAK;
                     }
                     let slots = 1.0 + n as f64 + parity as f64 + self.cfg.stop_bits as f64;
-                    let (start, stop, value) = (f.t0, (f.t0 as f64 + slots * self.bit).round() as u64, f.value);
-                    out.push(Annotation { start, end: stop, value, lane: 0, kind: Kind::Data, bits: self.cfg.data_bits, flags });
+                    let (start, stop, value) = (
+                        f.t0,
+                        (f.t0 as f64 + slots * self.bit).round() as u64,
+                        f.value,
+                    );
+                    out.push(Annotation {
+                        start,
+                        end: stop,
+                        value,
+                        lane: 0,
+                        kind: Kind::Data,
+                        bits: self.cfg.data_bits,
+                        flags,
+                    });
                     self.frame = None;
                     self.add_char(start, stop, value, flags, out);
                     return;
@@ -285,7 +340,10 @@ mod tests {
 
     /// The characters (lane 0).
     fn decode(cfg: UartConfig, w: &Wave) -> Vec<Annotation> {
-        decode_lanes(cfg, w).into_iter().filter(|a| a.lane == 0).collect()
+        decode_lanes(cfg, w)
+            .into_iter()
+            .filter(|a| a.lane == 0)
+            .collect()
     }
 
     fn decode_lanes(cfg: UartConfig, w: &Wave) -> Vec<Annotation> {
@@ -311,7 +369,13 @@ mod tests {
         let cfg = UartConfig::default();
         w.uart(0, 100, &cfg, b"Hello, UART!");
         let a = decode(cfg, &w);
-        assert_eq!(values(&a), b"Hello, UART!".iter().map(|&b| b as u32).collect::<Vec<_>>());
+        assert_eq!(
+            values(&a),
+            b"Hello, UART!"
+                .iter()
+                .map(|&b| b as u32)
+                .collect::<Vec<_>>()
+        );
         assert!(a.iter().all(|a| a.flags == 0 && a.lane == 0 && a.bits == 8));
         // The first frame spans start bit to stop bit: 10 bits of 86.8 samples.
         assert_eq!(a[0].start, 100);
@@ -327,20 +391,35 @@ mod tests {
             (8, Parity::Mark, 1.0, false, false),
             (9, Parity::Space, 1.0, true, true),
         ] {
-            let cfg = UartConfig { data_bits: bits, parity, stop_bits: stop, lsb_first: lsb, invert, baud: 250_000.0, ..Default::default() };
+            let cfg = UartConfig {
+                data_bits: bits,
+                parity,
+                stop_bits: stop,
+                lsb_first: lsb,
+                invert,
+                baud: 250_000.0,
+                ..Default::default()
+            };
             let mask = (1u32 << bits) - 1;
             let data: Vec<u8> = (0..20u32).map(|i| ((i * 37 + 5) & mask) as u8).collect();
             let mut w = Wave::new(RATE, 20_000, if invert { 0 } else { 1 });
             w.uart(0, 50, &cfg, &data);
             let a = decode(cfg.clone(), &w);
-            assert_eq!(values(&a), data.iter().map(|&b| b as u32).collect::<Vec<_>>(), "{cfg:?}");
+            assert_eq!(
+                values(&a),
+                data.iter().map(|&b| b as u32).collect::<Vec<_>>(),
+                "{cfg:?}"
+            );
             assert!(a.iter().all(|a| a.flags == 0), "{cfg:?}: {a:?}");
         }
     }
 
     #[test]
     fn parity_error_is_flagged_but_the_byte_is_kept() {
-        let cfg = UartConfig { parity: Parity::Even, ..Default::default() };
+        let cfg = UartConfig {
+            parity: Parity::Even,
+            ..Default::default()
+        };
         let mut w = Wave::new(RATE, 10_000, 1);
         w.uart(0, 100, &cfg, &[0x41, 0x42]);
         // Flip the parity bit of the first frame (bit slot 9, i.e. 1 + 8).
@@ -395,7 +474,8 @@ mod tests {
         w.uart(0, 100, &cfg, b"incremental decoding test");
         let whole = decode_lanes(cfg.clone(), &w);
         for chunk in [1usize, 7, 100, 333, 1000, 4096] {
-            let mut store = CaptureStore::new(StoreConfig::new(ChannelCount::new(8).unwrap(), RATE));
+            let mut store =
+                CaptureStore::new(StoreConfig::new(ChannelCount::new(8).unwrap(), RATE));
             let mut runner = Runner::new(Box::new(Uart::new(cfg.clone())));
             let mut got = Vec::new();
             for part in w.samples.chunks(chunk) {
@@ -437,9 +517,18 @@ mod tests {
         w.uart(0, 100, &cfg, b"AB\nCD\r\n");
         let a = decode_lanes(cfg.clone(), &w);
         let t = telegrams(&a);
-        assert_eq!(t.iter().map(|t| text(&a, t)).collect::<Vec<_>>(), vec!["AB\\n".to_string(), "CD\\r\\n".to_string()]);
+        assert_eq!(
+            t.iter().map(|t| text(&a, t)).collect::<Vec<_>>(),
+            vec!["AB\\n".to_string(), "CD\\r\\n".to_string()]
+        );
         // Without the option the idle gap decides, and these characters follow closely.
-        let a = decode_lanes(UartConfig { telegram_lf: false, ..cfg }, &w);
+        let a = decode_lanes(
+            UartConfig {
+                telegram_lf: false,
+                ..cfg
+            },
+            &w,
+        );
         let t = telegrams(&a);
         assert_eq!(t.len(), 1);
         assert_eq!(text(&a, t[0]), "AB\\nCD\\r\\n");
@@ -447,7 +536,10 @@ mod tests {
 
     #[test]
     fn telegrams_can_be_switched_off() {
-        let cfg = UartConfig { telegrams: false, ..Default::default() };
+        let cfg = UartConfig {
+            telegrams: false,
+            ..Default::default()
+        };
         let mut w = Wave::new(RATE, 20_000, 1);
         w.uart(0, 100, &cfg, b"abc");
         assert!(telegrams(&decode_lanes(cfg.clone(), &w)).is_empty());
@@ -462,16 +554,25 @@ mod tests {
         let mut w = Wave::new(RATE, 100_000, 1);
         let end = w.uart(0, 100, &cfg, b"XY") as usize;
         // The capture ends 10 bit times after the last character: the telegram may still continue.
-        let early = Wave { rate: RATE, samples: w.samples[..end + (10.0 * bit) as usize].to_vec() };
+        let early = Wave {
+            rate: RATE,
+            samples: w.samples[..end + (10.0 * bit) as usize].to_vec(),
+        };
         assert!(telegrams(&decode_lanes(cfg.clone(), &early)).is_empty());
         // 40 bit times of idle line: complete.
-        let late = Wave { rate: RATE, samples: w.samples[..end + (40.0 * bit) as usize].to_vec() };
+        let late = Wave {
+            rate: RATE,
+            samples: w.samples[..end + (40.0 * bit) as usize].to_vec(),
+        };
         assert_eq!(telegrams(&decode_lanes(cfg, &late)).len(), 1);
     }
 
     #[test]
     fn a_character_error_marks_its_telegram() {
-        let cfg = UartConfig { parity: Parity::Even, ..Default::default() };
+        let cfg = UartConfig {
+            parity: Parity::Even,
+            ..Default::default()
+        };
         let mut w = Wave::new(RATE, 40_000, 1);
         w.uart(0, 100, &cfg, b"OK");
         let slot = (RATE / cfg.baud) as u64;

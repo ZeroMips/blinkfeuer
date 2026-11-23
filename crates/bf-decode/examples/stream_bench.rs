@@ -31,16 +31,43 @@ fn run(d: &mut dyn Decoder, words: &[u32], rate: f64) -> (usize, usize) {
 }
 
 fn main() {
-    let ms: f64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(200.0);
-    let rate: f64 = std::env::args().nth(2).and_then(|s| s.parse::<f64>().ok()).unwrap_or(100.0) * 1e6;
+    let ms: f64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(200.0);
+    let rate: f64 = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(100.0)
+        * 1e6;
     let n = (ms * 1e-3 * rate) as u64;
     let g = Generator::new();
     let words: Vec<u32> = (0..n).map(|k| g.at_ns(time_ns(k, rate))).collect();
     println!("{} samples ({:.0} ms at {} MHz)", n, ms, rate / 1e6);
     let mut decoders: Vec<(&str, Box<dyn Decoder>)> = vec![
-        ("UART", Box::new(Uart::new(UartConfig { rx: ch::UART, ..Default::default() }))),
-        ("SPI", Box::new(Spi::new(SpiConfig { cs: Some(ch::SPI_CS), sck: ch::SPI_SCK, mosi: Some(ch::SPI_MOSI), ..Default::default() }))),
-        ("I2C", Box::new(I2c::new(I2cConfig { scl: ch::I2C_SCL, sda: ch::I2C_SDA }))),
+        (
+            "UART",
+            Box::new(Uart::new(UartConfig {
+                rx: ch::UART,
+                ..Default::default()
+            })),
+        ),
+        (
+            "SPI",
+            Box::new(Spi::new(SpiConfig {
+                cs: Some(ch::SPI_CS),
+                sck: ch::SPI_SCK,
+                mosi: Some(ch::SPI_MOSI),
+                ..Default::default()
+            })),
+        ),
+        (
+            "I2C",
+            Box::new(I2c::new(I2cConfig {
+                scl: ch::I2C_SCL,
+                sda: ch::I2C_SDA,
+            })),
+        ),
     ];
     for (name, d) in decoders.iter_mut() {
         let t = Instant::now();

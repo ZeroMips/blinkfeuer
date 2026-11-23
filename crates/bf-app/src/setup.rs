@@ -34,7 +34,12 @@ pub enum TriggerMode {
 }
 
 impl TriggerMode {
-    pub const ALL: [TriggerMode; 4] = [TriggerMode::Pattern, TriggerMode::Uart, TriggerMode::Spi, TriggerMode::I2c];
+    pub const ALL: [TriggerMode; 4] = [
+        TriggerMode::Pattern,
+        TriggerMode::Uart,
+        TriggerMode::Spi,
+        TriggerMode::I2c,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -64,7 +69,13 @@ pub enum I2cWhat {
 }
 
 impl I2cWhat {
-    pub const ALL: [I2cWhat; 5] = [I2cWhat::Start, I2cWhat::Stop, I2cWhat::Address, I2cWhat::Nak, I2cWhat::Data];
+    pub const ALL: [I2cWhat; 5] = [
+        I2cWhat::Start,
+        I2cWhat::Stop,
+        I2cWhat::Address,
+        I2cWhat::Nak,
+        I2cWhat::Data,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -112,11 +123,20 @@ pub struct ProtocolSetup {
 impl Default for ProtocolSetup {
     fn default() -> Self {
         Self {
-            uart: UartConfig { rx: 0, ..Default::default() },
+            uart: UartConfig {
+                rx: 0,
+                ..Default::default()
+            },
             uart_what: UartWhat::Bytes,
             uart_bytes: "sim 0".into(),
             uart_ascii: true,
-            spi: SpiConfig { cs: Some(1), sck: 2, mosi: Some(3), miso: None, ..Default::default() },
+            spi: SpiConfig {
+                cs: Some(1),
+                sck: 2,
+                mosi: Some(3),
+                miso: None,
+                ..Default::default()
+            },
             spi_miso: false,
             spi_value: "A5".into(),
             spi_care: "FF".into(),
@@ -131,12 +151,20 @@ impl Default for ProtocolSetup {
 
 /// "48 65 6c", "0x48,0x65", "4865" -> bytes.
 pub fn parse_hex_bytes(text: &str) -> Result<Vec<u8>, String> {
-    let cleaned: String = text.replace("0x", "").replace("0X", "").chars().filter(|c| !c.is_whitespace() && *c != ',').collect();
+    let cleaned: String = text
+        .replace("0x", "")
+        .replace("0X", "")
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != ',')
+        .collect();
     if cleaned.len() % 2 != 0 {
         return Err("hex bytes come in pairs of digits (48 65 6C)".into());
     }
     (0..cleaned.len() / 2)
-        .map(|i| u8::from_str_radix(&cleaned[2 * i..2 * i + 2], 16).map_err(|_| format!("'{}' is not hex", &cleaned[2 * i..2 * i + 2])))
+        .map(|i| {
+            u8::from_str_radix(&cleaned[2 * i..2 * i + 2], 16)
+                .map_err(|_| format!("'{}' is not hex", &cleaned[2 * i..2 * i + 2]))
+        })
         .collect()
 }
 
@@ -160,7 +188,9 @@ pub fn parse_ascii_bytes(text: &str) -> Result<Vec<u8>, String> {
             Some('\\') => out.push(b'\\'),
             Some('x') => {
                 let hex: String = it.by_ref().take(2).collect();
-                out.push(u8::from_str_radix(&hex, 16).map_err(|_| format!("\\x{hex} is not a byte"))?);
+                out.push(
+                    u8::from_str_radix(&hex, 16).map_err(|_| format!("\\x{hex} is not a byte"))?,
+                );
             }
             Some(other) => return Err(format!("unknown escape \\{other}")),
             None => return Err("a backslash at the end".into()),
@@ -170,7 +200,10 @@ pub fn parse_ascii_bytes(text: &str) -> Result<Vec<u8>, String> {
 }
 
 pub fn parse_hex_u32(text: &str) -> Result<u32, String> {
-    let t = text.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let t = text
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
     u32::from_str_radix(t, 16).map_err(|_| format!("'{}' is not a hex number", text.trim()))
 }
 
@@ -197,7 +230,11 @@ impl ProtocolSetup {
             TriggerMode::Spi => {
                 let value = parse_hex_u32(&self.spi_value)?;
                 let care = parse_hex_u32(&self.spi_care)?;
-                let lane = if self.spi_miso { SpiLane::Miso } else { SpiLane::Mosi };
+                let lane = if self.spi_miso {
+                    SpiLane::Miso
+                } else {
+                    SpiLane::Mosi
+                };
                 ProtocolTrigger::Spi(self.spi.clone(), SpiMatch::Word { lane, value, care })
             }
             TriggerMode::I2c => {
@@ -237,9 +274,21 @@ impl ProtocolSetup {
                 UartWhat::Bytes => format!("UART \"{}\"", self.uart_bytes),
                 UartWhat::Error => "UART error".into(),
             },
-            TriggerMode::Spi => format!("SPI {} = {}", if self.spi_miso { "MISO" } else { "MOSI" }, self.spi_value),
+            TriggerMode::Spi => format!(
+                "SPI {} = {}",
+                if self.spi_miso { "MISO" } else { "MOSI" },
+                self.spi_value
+            ),
             TriggerMode::I2c => match self.i2c_what {
-                I2cWhat::Address => format!("I2C address {}{}", self.i2c_value, match self.i2c_dir { Direction::Any => "", Direction::Read => " R", Direction::Write => " W" }),
+                I2cWhat::Address => format!(
+                    "I2C address {}{}",
+                    self.i2c_value,
+                    match self.i2c_dir {
+                        Direction::Any => "",
+                        Direction::Read => " R",
+                        Direction::Write => " W",
+                    }
+                ),
                 I2cWhat::Data => format!("I2C data {}", self.i2c_value),
                 other => format!("I2C {}", other.label()),
             },
@@ -258,7 +307,12 @@ pub enum SpanUnit {
 }
 
 impl SpanUnit {
-    pub const ALL: [SpanUnit; 4] = [SpanUnit::Samples, SpanUnit::Micros, SpanUnit::Millis, SpanUnit::Seconds];
+    pub const ALL: [SpanUnit; 4] = [
+        SpanUnit::Samples,
+        SpanUnit::Micros,
+        SpanUnit::Millis,
+        SpanUnit::Seconds,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -284,7 +338,11 @@ impl Span {
 
     /// The span in samples at `rate` samples per second (at least 0, rounded).
     pub fn samples(&self, rate: f64) -> u64 {
-        let v = if self.value.is_finite() { self.value.max(0.0) } else { 0.0 };
+        let v = if self.value.is_finite() {
+            self.value.max(0.0)
+        } else {
+            0.0
+        };
         let s = match self.unit {
             SpanUnit::Samples => v,
             SpanUnit::Micros => v * 1e-6 * rate,
@@ -316,7 +374,14 @@ pub struct TriggerSetup {
 
 impl Default for TriggerSetup {
     fn default() -> Self {
-        Self { enabled: false, mode: TriggerMode::Pattern, conds: vec![Cond::X; 32], protocol: ProtocolSetup::default(), pre: Span::new(1.0, SpanUnit::Millis), post: Span::new(4.0, SpanUnit::Millis) }
+        Self {
+            enabled: false,
+            mode: TriggerMode::Pattern,
+            conds: vec![Cond::X; 32],
+            protocol: ProtocolSetup::default(),
+            pre: Span::new(1.0, SpanUnit::Millis),
+            post: Span::new(4.0, SpanUnit::Millis),
+        }
     }
 }
 
@@ -342,7 +407,13 @@ impl TriggerSetup {
             .iter()
             .enumerate()
             .filter(|(_, c)| **c != Cond::X)
-            .map(|(i, c)| format!("{} {}", names.get(i).cloned().unwrap_or_else(|| format!("CH{i}")), c.label()))
+            .map(|(i, c)| {
+                format!(
+                    "{} {}",
+                    names.get(i).cloned().unwrap_or_else(|| format!("CH{i}")),
+                    c.label()
+                )
+            })
             .collect();
         match set.len() {
             0 => "immediately".to_string(),
@@ -392,9 +463,13 @@ impl Setup {
         if v.is_null() {
             return Ok(Self::default());
         }
-        let s: Setup = serde_json::from_value(v.clone()).map_err(|e| format!("setup is not readable: {e}"))?;
+        let s: Setup =
+            serde_json::from_value(v.clone()).map_err(|e| format!("setup is not readable: {e}"))?;
         if s.version > VERSION {
-            return Err(format!("the setup was written by a newer version ({} > {VERSION})", s.version));
+            return Err(format!(
+                "the setup was written by a newer version ({} > {VERSION})",
+                s.version
+            ));
         }
         if let (Some(l), Some(n)) = (&s.layout, s.channels) {
             l.check(n as usize)?;
@@ -404,7 +479,8 @@ impl Setup {
 
     pub fn read(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: not a setup file ({e})", path.display()))?;
+        let v: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("{}: not a setup file ({e})", path.display()))?;
         Self::from_json(&v)
     }
 
@@ -429,7 +505,9 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// Where the setup is kept between runs.
 pub fn autosave_path() -> Option<PathBuf> {
     // `BLINKFEUER_CONFIG_DIR` replaces the user's configuration directory (tests, screenshots).
-    let base = std::env::var_os("BLINKFEUER_CONFIG_DIR").map(PathBuf::from).or_else(dirs::config_dir)?;
+    let base = std::env::var_os("BLINKFEUER_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(dirs::config_dir)?;
     Some(base.join("blinkfeuer").join("setup.json"))
 }
 
@@ -475,8 +553,16 @@ mod tests {
     #[test]
     fn odd_files_are_handled() {
         // Missing fields are fine, unknown ones are ignored, nonsense is an error, never a panic.
-        assert!(Setup::from_json(&serde_json::json!({})).unwrap().layout.is_none());
-        assert!(Setup::from_json(&serde_json::json!({"future_field": 1, "rate": 5.0})).unwrap().rate == Some(5.0));
+        assert!(Setup::from_json(&serde_json::json!({}))
+            .unwrap()
+            .layout
+            .is_none());
+        assert!(
+            Setup::from_json(&serde_json::json!({"future_field": 1, "rate": 5.0}))
+                .unwrap()
+                .rate
+                == Some(5.0)
+        );
         assert!(Setup::from_json(&serde_json::json!({"rate": "fast"})).is_err());
         assert!(Setup::from_json(&serde_json::json!({"version": 99})).is_err());
         assert!(Setup::from_json(&serde_json::json!([1, 2])).is_err());
@@ -512,8 +598,18 @@ mod tests {
     fn atomic_write_replaces_the_file() {
         let dir = std::env::temp_dir().join(format!("lv-setup-test-{}", std::process::id()));
         let p = dir.join("sub").join("setup.json");
-        Setup { rate: Some(1.0), ..Default::default() }.write(&p).unwrap();
-        Setup { rate: Some(2.0), ..Default::default() }.write(&p).unwrap();
+        Setup {
+            rate: Some(1.0),
+            ..Default::default()
+        }
+        .write(&p)
+        .unwrap();
+        Setup {
+            rate: Some(2.0),
+            ..Default::default()
+        }
+        .write(&p)
+        .unwrap();
         assert_eq!(Setup::read(&p).unwrap().rate, Some(2.0));
         assert!(!dir.join("sub").join("setup.json.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -528,7 +624,11 @@ mod tests {
         assert_eq!(parse_hex_bytes("").unwrap(), b"");
         assert_eq!(parse_ascii_bytes("OK\\r\\n").unwrap(), b"OK\r\n");
         assert_eq!(parse_ascii_bytes("a\\x41\\\\b").unwrap(), b"aA\\b");
-        assert!(parse_ascii_bytes("bad\\q").is_err() && parse_ascii_bytes("x\\").is_err() && parse_ascii_bytes("\\xZZ").is_err());
+        assert!(
+            parse_ascii_bytes("bad\\q").is_err()
+                && parse_ascii_bytes("x\\").is_err()
+                && parse_ascii_bytes("\\xZZ").is_err()
+        );
         assert!(parse_ascii_bytes("é").is_err());
         assert_eq!(parse_hex_u32(" 0xA5 ").unwrap(), 0xA5);
         assert!(parse_hex_u32("G").is_err() && parse_hex_u32("").is_err());
@@ -539,10 +639,18 @@ mod tests {
         let mut p = ProtocolSetup::default();
         assert!(p.build(TriggerMode::Pattern).unwrap().is_none());
         // UART: the default text, then a hex entry, then nothing typed at all.
-        assert_eq!(p.build(TriggerMode::Uart).unwrap(), Some(ProtocolTrigger::Uart(p.uart.clone(), UartMatch::Bytes(b"sim 0".to_vec()))));
+        assert_eq!(
+            p.build(TriggerMode::Uart).unwrap(),
+            Some(ProtocolTrigger::Uart(
+                p.uart.clone(),
+                UartMatch::Bytes(b"sim 0".to_vec())
+            ))
+        );
         p.uart_ascii = false;
         p.uart_bytes = "4F 4B".into();
-        assert!(matches!(p.build(TriggerMode::Uart).unwrap(), Some(ProtocolTrigger::Uart(_, UartMatch::Bytes(b))) if b == b"OK"));
+        assert!(
+            matches!(p.build(TriggerMode::Uart).unwrap(), Some(ProtocolTrigger::Uart(_, UartMatch::Bytes(b))) if b == b"OK")
+        );
         p.uart_bytes.clear();
         assert!(p.build(TriggerMode::Uart).is_err());
         p.uart_what = UartWhat::Error;
@@ -560,7 +668,16 @@ mod tests {
         assert!(p.build(TriggerMode::I2c).is_err());
         p.i2c_value = "7F".into();
         p.i2c_dir = Direction::Read;
-        assert_eq!(p.build(TriggerMode::I2c).unwrap(), Some(ProtocolTrigger::I2c(p.i2c.clone(), I2cMatch::Address { addr: 0x7f, read: Some(true) })));
+        assert_eq!(
+            p.build(TriggerMode::I2c).unwrap(),
+            Some(ProtocolTrigger::I2c(
+                p.i2c.clone(),
+                I2cMatch::Address {
+                    addr: 0x7f,
+                    read: Some(true)
+                }
+            ))
+        );
         p.i2c_what = I2cWhat::Data;
         p.i2c_value = "FF".into();
         assert!(p.build(TriggerMode::I2c).is_ok());
@@ -570,14 +687,24 @@ mod tests {
 
     #[test]
     fn trigger_setup_survives_json_with_old_files_too() {
-        let mut t = TriggerSetup { enabled: true, mode: TriggerMode::Spi, ..Default::default() };
+        let mut t = TriggerSetup {
+            enabled: true,
+            mode: TriggerMode::Spi,
+            ..Default::default()
+        };
         t.protocol.spi_value = "3C".into();
         let back: TriggerSetup = serde_json::from_value(serde_json::to_value(&t).unwrap()).unwrap();
         assert!(back == t);
         // A file from before protocol triggers existed has none of the new fields.
-        let old: TriggerSetup = serde_json::from_value(serde_json::json!({"enabled": true, "pre_percent": 30.0})).unwrap();
+        let old: TriggerSetup =
+            serde_json::from_value(serde_json::json!({"enabled": true, "pre_percent": 30.0}))
+                .unwrap();
         assert_eq!(old.pre, Span::new(1.0, SpanUnit::Millis));
-        assert!(old.enabled && old.mode == TriggerMode::Pattern && old.protocol == ProtocolSetup::default());
+        assert!(
+            old.enabled
+                && old.mode == TriggerMode::Pattern
+                && old.protocol == ProtocolSetup::default()
+        );
         assert!(t.summary(&[]).contains("SPI MOSI = 3C"));
     }
 
@@ -592,7 +719,12 @@ mod tests {
         assert_eq!(Span::new(f64::NAN, SpanUnit::Seconds).samples(r), 0);
         assert!(Span::new(1e30, SpanUnit::Seconds).samples(r) > 1 << 60);
         // A file with nonsense spans is repaired, not trusted.
-        let t = TriggerSetup { pre: Span::new(f64::INFINITY, SpanUnit::Seconds), post: Span::new(-1.0, SpanUnit::Millis), ..Default::default() }.sanitized();
+        let t = TriggerSetup {
+            pre: Span::new(f64::INFINITY, SpanUnit::Seconds),
+            post: Span::new(-1.0, SpanUnit::Millis),
+            ..Default::default()
+        }
+        .sanitized();
         assert_eq!((t.pre.value, t.post.value), (0.0, 0.0));
     }
 }

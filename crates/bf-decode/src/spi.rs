@@ -21,7 +21,17 @@ pub struct SpiConfig {
 
 impl Default for SpiConfig {
     fn default() -> Self {
-        Self { sck: 1, cs: Some(0), mosi: Some(2), miso: None, cpol: false, cpha: false, msb_first: true, bits: 8, cs_active_low: true }
+        Self {
+            sck: 1,
+            cs: Some(0),
+            mosi: Some(2),
+            miso: None,
+            cpol: false,
+            cpha: false,
+            msb_first: true,
+            bits: 8,
+            cs_active_low: true,
+        }
     }
 }
 
@@ -42,7 +52,19 @@ pub struct Spi {
 
 impl Spi {
     pub fn new(cfg: SpiConfig) -> Self {
-        Self { cfg, primed: false, prev: 0, in_txn: false, txn_start: 0, words: 0, n: 0, mosi: 0, miso: 0, first_t: 0, last_t: 0 }
+        Self {
+            cfg,
+            primed: false,
+            prev: 0,
+            in_txn: false,
+            txn_start: 0,
+            words: 0,
+            n: 0,
+            mosi: 0,
+            miso: 0,
+            first_t: 0,
+            last_t: 0,
+        }
     }
 
     pub fn config(&self) -> &SpiConfig {
@@ -50,17 +72,34 @@ impl Spi {
     }
 
     fn cs_active(&self, state: u32) -> bool {
-        self.cfg.cs.map_or(true, |c| bit(state, c) != self.cfg.cs_active_low)
+        self.cfg
+            .cs
+            .map_or(true, |c| bit(state, c) != self.cfg.cs_active_low)
     }
 
     fn emit_word(&mut self, flags: u8, out: &mut Vec<Annotation>) {
         let bits = self.n;
         // Words are drawn from half a clock before the first sampling edge to half a clock after the
         // last, so that consecutive words touch.
-        let period = if bits > 1 { (self.last_t - self.first_t) / (bits as u64 - 1) } else { 2 };
-        let (start, end) = (self.first_t.saturating_sub(period / 2).max(self.txn_start), self.last_t + period / 2 + 1);
+        let period = if bits > 1 {
+            (self.last_t - self.first_t) / (bits as u64 - 1)
+        } else {
+            2
+        };
+        let (start, end) = (
+            self.first_t.saturating_sub(period / 2).max(self.txn_start),
+            self.last_t + period / 2 + 1,
+        );
         let mut emit = |lane: u8, value: u32| {
-            out.push(Annotation { start, end, value, lane, kind: Kind::Data, bits, flags });
+            out.push(Annotation {
+                start,
+                end,
+                value,
+                lane,
+                kind: Kind::Data,
+                bits,
+                flags,
+            });
         };
         if self.cfg.mosi.is_some() {
             emit(0, self.mosi);
@@ -79,7 +118,15 @@ impl Spi {
             self.emit_word(flag::INCOMPLETE, out);
         }
         if self.cfg.cs.is_some() && self.words > 0 {
-            out.push(Annotation { start: self.txn_start, end: t.max(self.txn_start + 1), value: self.words, lane: 2, kind: Kind::Frame, bits: 0, flags: 0 });
+            out.push(Annotation {
+                start: self.txn_start,
+                end: t.max(self.txn_start + 1),
+                value: self.words,
+                lane: 2,
+                kind: Kind::Frame,
+                bits: 0,
+                flags: 0,
+            });
         }
         self.in_txn = false;
     }
@@ -113,7 +160,10 @@ impl Decoder for Spi {
 
     fn mask(&self) -> u32 {
         let mut m = 1 << self.cfg.sck;
-        for c in [self.cfg.cs, self.cfg.mosi, self.cfg.miso].into_iter().flatten() {
+        for c in [self.cfg.cs, self.cfg.mosi, self.cfg.miso]
+            .into_iter()
+            .flatten()
+        {
             m |= 1 << c;
         }
         // MOSI and MISO are only sampled on clock edges: changes of the data lines alone are not
@@ -153,7 +203,10 @@ impl Decoder for Spi {
             if self.n == 0 {
                 self.first_t = t;
             }
-            let (mi, mo) = (self.cfg.mosi.map_or(false, |c| bit(state, c)), self.cfg.miso.map_or(false, |c| bit(state, c)));
+            let (mi, mo) = (
+                self.cfg.mosi.map_or(false, |c| bit(state, c)),
+                self.cfg.miso.map_or(false, |c| bit(state, c)),
+            );
             if self.cfg.msb_first {
                 self.mosi = (self.mosi << 1) | mi as u32;
                 self.miso = (self.miso << 1) | mo as u32;
@@ -187,7 +240,10 @@ mod tests {
     }
 
     fn words(a: &[Annotation], lane: u8) -> Vec<u32> {
-        a.iter().filter(|a| a.lane == lane && a.kind == Kind::Data).map(|a| a.value).collect()
+        a.iter()
+            .filter(|a| a.lane == lane && a.kind == Kind::Data)
+            .map(|a| a.value)
+            .collect()
     }
 
     fn init(cfg: &SpiConfig) -> u32 {
@@ -198,7 +254,12 @@ mod tests {
     #[test]
     fn all_four_modes_decode_the_same_bytes() {
         for (cpol, cpha) in [(false, false), (false, true), (true, false), (true, true)] {
-            let cfg = SpiConfig { cpol, cpha, miso: Some(3), ..Default::default() };
+            let cfg = SpiConfig {
+                cpol,
+                cpha,
+                miso: Some(3),
+                ..Default::default()
+            };
             let mut w = Wave::new(RATE, 6_000, init(&cfg));
             let mosi = [0xA5, 0x3C, 0xFF, 0x00];
             let miso = [0x12, 0x34, 0x56, 0x78];
@@ -216,9 +277,20 @@ mod tests {
     #[test]
     fn lsb_first_and_word_sizes() {
         for (bits, msb) in [(8u8, false), (12, true), (16, false), (32, true), (5, true)] {
-            let cfg = SpiConfig { bits, msb_first: msb, ..Default::default() };
-            let mask = if bits == 32 { u32::MAX } else { (1u32 << bits) - 1 };
-            let data: Vec<u32> = [0x1234_5678u32, 0x9ABC_DEF0, 0x0F0F_0F0F].iter().map(|v| v & mask).collect();
+            let cfg = SpiConfig {
+                bits,
+                msb_first: msb,
+                ..Default::default()
+            };
+            let mask = if bits == 32 {
+                u32::MAX
+            } else {
+                (1u32 << bits) - 1
+            };
+            let data: Vec<u32> = [0x1234_5678u32, 0x9ABC_DEF0, 0x0F0F_0F0F]
+                .iter()
+                .map(|v| v & mask)
+                .collect();
             let mut w = Wave::new(RATE, 12_000, init(&cfg));
             w.spi(&cfg, 100, 10, &data, &[]);
             let a = run(&cfg, &w);
@@ -235,13 +307,20 @@ mod tests {
         w.spi(&cfg, e1 + 50, 10, &[0x33], &[]);
         let a = run(&cfg, &w);
         assert_eq!(words(&a, 0), vec![0x11, 0x22, 0x33]);
-        let frames: Vec<u32> = a.iter().filter(|a| a.kind == Kind::Frame).map(|a| a.value).collect();
+        let frames: Vec<u32> = a
+            .iter()
+            .filter(|a| a.kind == Kind::Frame)
+            .map(|a| a.value)
+            .collect();
         assert_eq!(frames, vec![2, 1]);
     }
 
     #[test]
     fn without_chip_select_words_follow_the_clock() {
-        let cfg = SpiConfig { cs: None, ..Default::default() };
+        let cfg = SpiConfig {
+            cs: None,
+            ..Default::default()
+        };
         let mut w = Wave::new(RATE, 6_000, init(&cfg));
         w.spi(&cfg, 100, 10, &[0xDE, 0xAD, 0xBE, 0xEF], &[]);
         let a = run(&cfg, &w);
@@ -273,7 +352,10 @@ mod tests {
         let a = run(&cfg, &w);
         let d: Vec<_> = a.iter().filter(|a| a.kind == Kind::Data).collect();
         for p in d.windows(2) {
-            assert!(p[0].end <= p[1].start + 1 && p[0].end + 3 >= p[1].start, "{p:?}");
+            assert!(
+                p[0].end <= p[1].start + 1 && p[0].end + 3 >= p[1].start,
+                "{p:?}"
+            );
         }
     }
 }

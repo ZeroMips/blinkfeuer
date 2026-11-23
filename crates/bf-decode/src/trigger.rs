@@ -30,7 +30,11 @@ pub enum SpiLane {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpiMatch {
     /// A word on the given line; only the bits set in `care` have to match `value`.
-    Word { lane: SpiLane, value: u32, care: u32 },
+    Word {
+        lane: SpiLane,
+        value: u32,
+        care: u32,
+    },
 }
 
 /// What to look for on an I2C bus.
@@ -39,7 +43,10 @@ pub enum I2cMatch {
     Start,
     Stop,
     /// A 7-bit address; `read`: `Some(true)` only reads, `Some(false)` only writes.
-    Address { addr: u8, read: Option<bool> },
+    Address {
+        addr: u8,
+        read: Option<bool>,
+    },
     /// Any byte that was not acknowledged.
     Nak,
     /// A data byte (not an address) with this value.
@@ -105,7 +112,8 @@ impl DecoderTrigger {
                         if self.recent.len() > seq.len() {
                             self.recent.remove(0);
                         }
-                        let hit = self.recent.len() == seq.len() && self.recent.iter().map(|c| c.0).eq(seq.iter().copied());
+                        let hit = self.recent.len() == seq.len()
+                            && self.recent.iter().map(|c| c.0).eq(seq.iter().copied());
                         if hit {
                             begins = self.recent[0].1;
                         }
@@ -113,11 +121,14 @@ impl DecoderTrigger {
                     }
                 }
                 Matcher::UartError => a.lane == 0 && a.kind == Kind::Data && a.is_error(),
-                Matcher::SpiWord { lane, value, care } => a.kind == Kind::Data && a.lane == *lane && (a.value ^ value) & care == 0,
+                Matcher::SpiWord { lane, value, care } => {
+                    a.kind == Kind::Data && a.lane == *lane && (a.value ^ value) & care == 0
+                }
                 Matcher::I2c(m) => match (m, a.kind) {
                     (I2cMatch::Start, Kind::Start) | (I2cMatch::Stop, Kind::Stop) => true,
                     (I2cMatch::Address { addr, read }, Kind::Address) => {
-                        a.value == *addr as u32 && read.is_none_or(|r| r == (a.flags & flag::READ != 0))
+                        a.value == *addr as u32
+                            && read.is_none_or(|r| r == (a.flags & flag::READ != 0))
                     }
                     (I2cMatch::Nak, Kind::Address | Kind::Data) => a.flags & flag::NAK != 0,
                     (I2cMatch::Data(v), Kind::Data) => a.value == *v as u32,
@@ -206,28 +217,66 @@ impl ProtocolTrigger {
     /// The trigger as something the capture thread can run.
     pub fn build(&self, at: TriggerAt) -> Result<Box<dyn EventTrigger>, String> {
         self.check()?;
-        let (dec, matcher, lookback_bits, bit_rate): (Box<dyn Decoder>, Matcher, f64, f64) = match self {
-            ProtocolTrigger::Uart(c, m) => {
-                let mut cfg = c.clone();
-                cfg.telegrams = false;
-                let frame_bits = 1.0 + cfg.data_bits as f64 + if cfg.parity == crate::uart::Parity::None { 0.0 } else { 1.0 } + cfg.stop_bits as f64;
-                let matcher = match m {
-                    UartMatch::Bytes(b) => Matcher::UartBytes(b.clone()),
-                    UartMatch::Error => Matcher::UartError,
-                };
-                let chars = if let UartMatch::Bytes(b) = m { b.len() as f64 } else { 1.0 };
-                (Box::new(Uart::new(cfg.clone())), matcher, chars * (frame_bits + 2.0) + 2.0, cfg.baud)
-            }
-            ProtocolTrigger::Spi(c, SpiMatch::Word { lane, value, care }) => {
-                let lane = match lane {
-                    SpiLane::Mosi => 0,
-                    SpiLane::Miso => 1,
-                };
-                (Box::new(Spi::new(c.clone())), Matcher::SpiWord { lane, value: *value, care: *care }, 0.0, 1.0)
-            }
-            ProtocolTrigger::I2c(c, m) => (Box::new(I2c::new(c.clone())), Matcher::I2c(*m), 0.0, 1.0),
-        };
-        Ok(Box::new(DecoderTrigger { dec, matcher, at, out: Vec::new(), recent: Vec::new(), max_len: 0, lookback_bits, bit_rate, lookback: 0 }))
+        let (dec, matcher, lookback_bits, bit_rate): (Box<dyn Decoder>, Matcher, f64, f64) =
+            match self {
+                ProtocolTrigger::Uart(c, m) => {
+                    let mut cfg = c.clone();
+                    cfg.telegrams = false;
+                    let frame_bits = 1.0
+                        + cfg.data_bits as f64
+                        + if cfg.parity == crate::uart::Parity::None {
+                            0.0
+                        } else {
+                            1.0
+                        }
+                        + cfg.stop_bits as f64;
+                    let matcher = match m {
+                        UartMatch::Bytes(b) => Matcher::UartBytes(b.clone()),
+                        UartMatch::Error => Matcher::UartError,
+                    };
+                    let chars = if let UartMatch::Bytes(b) = m {
+                        b.len() as f64
+                    } else {
+                        1.0
+                    };
+                    (
+                        Box::new(Uart::new(cfg.clone())),
+                        matcher,
+                        chars * (frame_bits + 2.0) + 2.0,
+                        cfg.baud,
+                    )
+                }
+                ProtocolTrigger::Spi(c, SpiMatch::Word { lane, value, care }) => {
+                    let lane = match lane {
+                        SpiLane::Mosi => 0,
+                        SpiLane::Miso => 1,
+                    };
+                    (
+                        Box::new(Spi::new(c.clone())),
+                        Matcher::SpiWord {
+                            lane,
+                            value: *value,
+                            care: *care,
+                        },
+                        0.0,
+                        1.0,
+                    )
+                }
+                ProtocolTrigger::I2c(c, m) => {
+                    (Box::new(I2c::new(c.clone())), Matcher::I2c(*m), 0.0, 1.0)
+                }
+            };
+        Ok(Box::new(DecoderTrigger {
+            dec,
+            matcher,
+            at,
+            out: Vec::new(),
+            recent: Vec::new(),
+            max_len: 0,
+            lookback_bits,
+            bit_rate,
+            lookback: 0,
+        }))
     }
 }
 
@@ -240,7 +289,13 @@ mod tests {
         run_at(t, words, rate, chunk, TriggerAt::End)
     }
 
-    fn run_at(t: &ProtocolTrigger, words: &[u32], rate: f64, chunk: usize, at: TriggerAt) -> Option<u64> {
+    fn run_at(
+        t: &ProtocolTrigger,
+        words: &[u32],
+        rate: f64,
+        chunk: usize,
+        at: TriggerAt,
+    ) -> Option<u64> {
         let mut ev = t.build(at).unwrap();
         ev.reset(rate);
         let mask = ev.mask();
@@ -264,7 +319,11 @@ mod tests {
     }
 
     fn uart_wave(bytes: &[u8]) -> (Vec<u32>, UartConfig, u64) {
-        let cfg = UartConfig { rx: 2, baud: 100_000.0, ..Default::default() };
+        let cfg = UartConfig {
+            rx: 2,
+            baud: 100_000.0,
+            ..Default::default()
+        };
         let mut w = Wave::new(1e6, 4000, 1 << 2);
         let end = w.uart(2, 100, &cfg, bytes);
         (w.samples.clone(), cfg, end)
@@ -280,19 +339,49 @@ mod tests {
             let t = ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"lo w".to_vec()));
             let hit = run(&t, &words, 1e6, chunk).expect("fires");
             // "lo w" ends with the byte at index 6.
-            assert!((hit as i64 - frame_end(6) as i64).abs() <= 10, "chunk {chunk}: {hit} vs {}", frame_end(6));
+            assert!(
+                (hit as i64 - frame_end(6) as i64).abs() <= 10,
+                "chunk {chunk}: {hit} vs {}",
+                frame_end(6)
+            );
         }
         // A sequence that is not in the data never fires; a single byte does, at its own end.
-        assert_eq!(run(&ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"xyz".to_vec())), &words, 1e6, 64), None);
-        let one = run(&ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"h".to_vec())), &words, 1e6, 64).unwrap();
+        assert_eq!(
+            run(
+                &ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"xyz".to_vec())),
+                &words,
+                1e6,
+                64
+            ),
+            None
+        );
+        let one = run(
+            &ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"h".to_vec())),
+            &words,
+            1e6,
+            64,
+        )
+        .unwrap();
         assert!((one as i64 - frame_end(0) as i64).abs() <= 10);
         // Bytes must follow each other directly: "h" then "l" is not in "hello world".
-        assert_eq!(run(&ProtocolTrigger::Uart(cfg, UartMatch::Bytes(b"hl".to_vec())), &words, 1e6, 64), None);
+        assert_eq!(
+            run(
+                &ProtocolTrigger::Uart(cfg, UartMatch::Bytes(b"hl".to_vec())),
+                &words,
+                1e6,
+                64
+            ),
+            None
+        );
     }
 
     #[test]
     fn uart_errors_are_found() {
-        let cfg = UartConfig { rx: 2, baud: 100_000.0, ..Default::default() };
+        let cfg = UartConfig {
+            rx: 2,
+            baud: 100_000.0,
+            ..Default::default()
+        };
         let mut w = Wave::new(1e6, 3000, 1 << 2);
         let a = w.uart(2, 100, &cfg, b"ok");
         // A frame whose stop bit is low: framing error.
@@ -300,26 +389,55 @@ mod tests {
         w.set(2, bad_start, bad_start + 10, false); // start bit
         w.set(2, bad_start + 10, bad_start + 100, false); // data and stop all low
         let words = w.samples.clone();
-        let hit = run(&ProtocolTrigger::Uart(cfg.clone(), UartMatch::Error), &words, 1e6, 100).expect("framing error fires");
+        let hit = run(
+            &ProtocolTrigger::Uart(cfg.clone(), UartMatch::Error),
+            &words,
+            1e6,
+            100,
+        )
+        .expect("framing error fires");
         assert!(hit > bad_start && hit <= bad_start + 120, "{hit}");
         // Clean data has no errors.
         let (clean, cfg2, _) = uart_wave(b"fine");
-        assert_eq!(run(&ProtocolTrigger::Uart(cfg2, UartMatch::Error), &clean, 1e6, 100), None);
+        assert_eq!(
+            run(
+                &ProtocolTrigger::Uart(cfg2, UartMatch::Error),
+                &clean,
+                1e6,
+                100
+            ),
+            None
+        );
     }
 
     #[test]
     fn spi_words_match_under_a_care_mask() {
-        let cfg = SpiConfig { sck: 1, cs: Some(0), mosi: Some(2), miso: Some(3), ..Default::default() };
+        let cfg = SpiConfig {
+            sck: 1,
+            cs: Some(0),
+            mosi: Some(2),
+            miso: Some(3),
+            ..Default::default()
+        };
         let mut w = Wave::new(1e6, 6000, 1);
         w.spi(&cfg, 100, 10, &[0x12, 0xA5, 0x34], &[0xF0, 0x0F, 0x55]);
         let words = w.samples.clone();
-        let word = |lane, value, care| ProtocolTrigger::Spi(cfg.clone(), SpiMatch::Word { lane, value, care });
+        let word = |lane, value, care| {
+            ProtocolTrigger::Spi(cfg.clone(), SpiMatch::Word { lane, value, care })
+        };
         let a5 = run(&word(SpiLane::Mosi, 0xA5, 0xFF), &words, 1e6, 50).expect("A5 on MOSI");
         let low_nibble_5 = run(&word(SpiLane::Mosi, 0x05, 0x0F), &words, 1e6, 50).unwrap();
-        assert_eq!(a5, low_nibble_5, "0xA5 is the first word whose low nibble is 5");
+        assert_eq!(
+            a5, low_nibble_5,
+            "0xA5 is the first word whose low nibble is 5"
+        );
         let first = run(&word(SpiLane::Mosi, 0x12, 0xFF), &words, 1e6, 50).unwrap();
         assert!(first < a5);
-        assert_eq!(run(&word(SpiLane::Mosi, 0xA5, 0xFF), &words, 1e6, 1).unwrap(), a5, "buffer size does not matter");
+        assert_eq!(
+            run(&word(SpiLane::Mosi, 0xA5, 0xFF), &words, 1e6, 1).unwrap(),
+            a5,
+            "buffer size does not matter"
+        );
         // The same value on the other line is a different match: MISO sends 0x0F second.
         let m = run(&word(SpiLane::Miso, 0x0F, 0xFF), &words, 1e6, 50).unwrap();
         assert!(m > first && m < run(&word(SpiLane::Miso, 0x55, 0xFF), &words, 1e6, 50).unwrap());
@@ -344,29 +462,88 @@ mod tests {
         let words = w.samples.clone();
         let go = |m| run(&ProtocolTrigger::I2c(cfg.clone(), m), &words, 1e6, 33);
         let start = go(I2cMatch::Start).unwrap();
-        let a50 = go(I2cMatch::Address { addr: 0x50, read: None }).unwrap();
-        let a48 = go(I2cMatch::Address { addr: 0x48, read: Some(true) }).unwrap();
+        let a50 = go(I2cMatch::Address {
+            addr: 0x50,
+            read: None,
+        })
+        .unwrap();
+        let a48 = go(I2cMatch::Address {
+            addr: 0x48,
+            read: Some(true),
+        })
+        .unwrap();
         let d3c = go(I2cMatch::Data(0x3C)).unwrap();
         let nak = go(I2cMatch::Nak).unwrap();
         let stop = go(I2cMatch::Stop).unwrap();
-        assert!(start < a50 && a50 < d3c && d3c < a48 && a48 < nak && nak <= stop, "{start} {a50} {d3c} {a48} {nak} {stop}");
+        assert!(
+            start < a50 && a50 < d3c && d3c < a48 && a48 < nak && nak <= stop,
+            "{start} {a50} {d3c} {a48} {nak} {stop}"
+        );
         assert!(stop >= stop_at);
         // Direction is part of the match: 0x50 is only ever written, 0x48 only read.
-        assert_eq!(go(I2cMatch::Address { addr: 0x50, read: Some(true) }), None);
-        assert_eq!(go(I2cMatch::Address { addr: 0x48, read: Some(false) }), None);
-        assert_eq!(go(I2cMatch::Address { addr: 0x77, read: None }), None);
+        assert_eq!(
+            go(I2cMatch::Address {
+                addr: 0x50,
+                read: Some(true)
+            }),
+            None
+        );
+        assert_eq!(
+            go(I2cMatch::Address {
+                addr: 0x48,
+                read: Some(false)
+            }),
+            None
+        );
+        assert_eq!(
+            go(I2cMatch::Address {
+                addr: 0x77,
+                read: None
+            }),
+            None
+        );
     }
 
     #[test]
     fn settings_are_checked() {
         let u = UartConfig::default();
-        assert!(ProtocolTrigger::Uart(u.clone(), UartMatch::Bytes(vec![])).check().is_err());
-        assert!(ProtocolTrigger::Uart(u.clone(), UartMatch::Bytes(vec![0; MAX_SEQUENCE + 1])).check().is_err());
-        assert!(ProtocolTrigger::Uart(UartConfig { data_bits: 7, ..u.clone() }, UartMatch::Bytes(vec![0x80])).check().is_err());
+        assert!(ProtocolTrigger::Uart(u.clone(), UartMatch::Bytes(vec![]))
+            .check()
+            .is_err());
+        assert!(
+            ProtocolTrigger::Uart(u.clone(), UartMatch::Bytes(vec![0; MAX_SEQUENCE + 1]))
+                .check()
+                .is_err()
+        );
+        assert!(ProtocolTrigger::Uart(
+            UartConfig {
+                data_bits: 7,
+                ..u.clone()
+            },
+            UartMatch::Bytes(vec![0x80])
+        )
+        .check()
+        .is_err());
         assert!(ProtocolTrigger::Uart(u, UartMatch::Error).check().is_ok());
-        let s = SpiConfig { miso: None, ..Default::default() };
-        assert!(ProtocolTrigger::Spi(s, SpiMatch::Word { lane: SpiLane::Miso, value: 0, care: 0 }).check().is_err());
-        assert!(ProtocolTrigger::I2c(I2cConfig { scl: 3, sda: 3 }, I2cMatch::Start).check().is_err());
+        let s = SpiConfig {
+            miso: None,
+            ..Default::default()
+        };
+        assert!(ProtocolTrigger::Spi(
+            s,
+            SpiMatch::Word {
+                lane: SpiLane::Miso,
+                value: 0,
+                care: 0
+            }
+        )
+        .check()
+        .is_err());
+        assert!(
+            ProtocolTrigger::I2c(I2cConfig { scl: 3, sda: 3 }, I2cMatch::Start)
+                .check()
+                .is_err()
+        );
     }
 
     #[test]
@@ -377,16 +554,25 @@ mod tests {
             let end = run_at(&seq, &words, 1e6, chunk, TriggerAt::End).unwrap();
             let start = run_at(&seq, &words, 1e6, chunk, TriggerAt::Start).unwrap();
             // The sequence is the characters 3..=6; the first of them starts at 100 + 120 * 3.
-            assert!((start as i64 - 460).abs() <= 10, "chunk {chunk}: start {start}");
+            assert!(
+                (start as i64 - 460).abs() <= 10,
+                "chunk {chunk}: start {start}"
+            );
             assert!(end > start + 300, "start {start} end {end}");
         }
         // A single item: the start is where it began, a frame of 100 samples before its end.
         let one = ProtocolTrigger::Uart(cfg, UartMatch::Bytes(b"w".to_vec()));
-        let (s, e) = (run_at(&one, &words, 1e6, 64, TriggerAt::Start).unwrap(), run_at(&one, &words, 1e6, 64, TriggerAt::End).unwrap());
+        let (s, e) = (
+            run_at(&one, &words, 1e6, 64, TriggerAt::Start).unwrap(),
+            run_at(&one, &words, 1e6, 64, TriggerAt::End).unwrap(),
+        );
         assert!((e - s) as i64 >= 90 && (e - s) as i64 <= 110, "{s} {e}");
         // The look-back needed to keep the start in the window grows with the sequence.
         let long = ProtocolTrigger::Uart(UartConfig::default(), UartMatch::Bytes(vec![0x55; 8]));
-        let (mut a, mut b) = (long.build(TriggerAt::End).unwrap(), long.build(TriggerAt::Start).unwrap());
+        let (mut a, mut b) = (
+            long.build(TriggerAt::End).unwrap(),
+            long.build(TriggerAt::Start).unwrap(),
+        );
         a.reset(1e6);
         b.reset(1e6);
         assert!(b.lookback() >= a.lookback() && b.lookback() > 0);

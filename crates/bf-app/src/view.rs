@@ -15,7 +15,10 @@ pub struct View {
 
 impl Default for View {
     fn default() -> Self {
-        Self { start: 0.0, spp: 1.0 }
+        Self {
+            start: 0.0,
+            spp: 1.0,
+        }
     }
 }
 
@@ -35,7 +38,10 @@ impl View {
     /// Show the whole `range` (at least a few samples).
     pub fn fit(range: Range<u64>, width: f64) -> View {
         let len = (range.end.saturating_sub(range.start)).max(8) as f64;
-        View { start: range.start as f64, spp: (len / width.max(1.0)).max(MIN_SPP) }
+        View {
+            start: range.start as f64,
+            spp: (len / width.max(1.0)).max(MIN_SPP),
+        }
     }
 
     /// Zoom by `factor` (> 1 zooms in) keeping the sample under pixel `anchor_x` fixed.
@@ -60,7 +66,10 @@ impl View {
         let max_spp = (len * 4.0 / width.max(1.0)).max(1.0);
         self.spp = self.spp.clamp(MIN_SPP, max_spp);
         let span = width * self.spp;
-        self.start = self.start.clamp(range.start as f64 - span * 0.9, range.end as f64 - span * 0.1);
+        self.start = self.start.clamp(
+            range.start as f64 - span * 0.9,
+            range.end as f64 - span * 0.1,
+        );
     }
 }
 
@@ -82,7 +91,11 @@ pub fn nice_step(min: f64) -> f64 {
 pub fn format_time(t: f64, step: f64) -> String {
     let (unit, scale) = unit_for(t.abs().max(step));
     let step_u = step * scale;
-    let decimals = if step_u >= 1.0 { 0 } else { (-step_u.log10()).ceil().clamp(0.0, 9.0) as usize };
+    let decimals = if step_u >= 1.0 {
+        0
+    } else {
+        (-step_u.log10()).ceil().clamp(0.0, 9.0) as usize
+    };
     format!("{:.*} {}", decimals, t * scale, unit)
 }
 
@@ -101,11 +114,19 @@ fn unit_for(t: f64) -> (&'static str, f64) {
 /// Exact, easy to read time: groups of three digits per unit, like a timecode
 /// ("1 s 518 ms 460 µs 120 ns"). `res` is the sample period; digits finer than it are not shown.
 pub fn format_split(t: f64, res: f64) -> String {
-    const UNITS: [(&str, i128); 5] =
-        [("s", 1_000_000_000_000), ("ms", 1_000_000_000), ("µs", 1_000_000), ("ns", 1_000), ("ps", 1)];
+    const UNITS: [(&str, i128); 5] = [
+        ("s", 1_000_000_000_000),
+        ("ms", 1_000_000_000),
+        ("µs", 1_000_000),
+        ("ns", 1_000),
+        ("ps", 1),
+    ];
     let res_ps = (res * 1e12).round().max(1.0) as i128;
     // Lowest unit that still shows the sample period exactly.
-    let low = UNITS.iter().position(|&(_, u)| res_ps % u == 0).unwrap_or(UNITS.len() - 1);
+    let low = UNITS
+        .iter()
+        .position(|&(_, u)| res_ps % u == 0)
+        .unwrap_or(UNITS.len() - 1);
     let step = UNITS[low].1;
     let ps = (t.abs() * 1e12 / step as f64).round() as i128 * step;
     let mut rest = ps;
@@ -115,7 +136,10 @@ pub fn format_split(t: f64, res: f64) -> String {
         rest %= u;
     }
     // Drop leading zero groups but keep the last one ("0 ns").
-    let first = groups.iter().position(|g| g.0 != 0).unwrap_or(groups.len() - 1);
+    let first = groups
+        .iter()
+        .position(|g| g.0 != 0)
+        .unwrap_or(groups.len() - 1);
     let mut out = String::from(if t < 0.0 && ps != 0 { "-" } else { "" });
     for (k, (value, name)) in groups[first..].iter().enumerate() {
         if k > 0 {
@@ -167,7 +191,13 @@ pub fn format_duration(t: f64) -> String {
         ("s", 1.0)
     };
     let v = t * scale;
-    let decimals = if v >= 100.0 { 0 } else if v >= 10.0 { 1 } else { 2 };
+    let decimals = if v >= 100.0 {
+        0
+    } else if v >= 10.0 {
+        1
+    } else {
+        2
+    };
     format!("{:.*} {}", decimals, v, unit)
 }
 
@@ -247,7 +277,10 @@ mod tests {
 
     #[test]
     fn zoom_keeps_the_anchor_sample_fixed() {
-        let mut v = View { start: 1000.0, spp: 10.0 };
+        let mut v = View {
+            start: 1000.0,
+            spp: 10.0,
+        };
         let anchor = v.sample_at(300.0);
         v.zoom_at(300.0, 2.0);
         assert!((v.sample_at(300.0) - anchor).abs() < 1e-9);
@@ -258,7 +291,10 @@ mod tests {
 
     #[test]
     fn zoom_is_bounded() {
-        let mut v = View { start: 0.0, spp: 0.02 };
+        let mut v = View {
+            start: 0.0,
+            spp: 0.02,
+        };
         v.zoom_at(10.0, 100.0);
         assert_eq!(v.spp, MIN_SPP);
     }
@@ -269,17 +305,26 @@ mod tests {
         assert_eq!(v.start, 100.0);
         assert!((v.spp - 2.0).abs() < 1e-12);
         assert!((v.end(500.0) - 1100.0).abs() < 1e-9);
-        let mut f = View { start: 0.0, spp: 4.0 };
+        let mut f = View {
+            start: 0.0,
+            spp: 4.0,
+        };
         f.follow(10_000, 250.0);
         assert!((f.end(250.0) - 10_000.0).abs() < 1e-9);
     }
 
     #[test]
     fn clamp_keeps_data_in_view() {
-        let mut v = View { start: 1e9, spp: 1.0 };
+        let mut v = View {
+            start: 1e9,
+            spp: 1.0,
+        };
         v.clamp(0..1000, 500.0);
         assert!(v.start <= 1000.0 - 50.0);
-        let mut v = View { start: -1e9, spp: 1e9 };
+        let mut v = View {
+            start: -1e9,
+            spp: 1e9,
+        };
         v.clamp(0..1000, 500.0);
         assert!(v.spp <= 8.0 + 1e-9);
         assert!(v.start >= -(500.0 * v.spp));
@@ -313,7 +358,10 @@ mod tests {
 
     #[test]
     fn ticks_are_spaced_and_inside_the_view() {
-        let v = View { start: 0.0, spp: 100.0 };
+        let v = View {
+            start: 0.0,
+            spp: 100.0,
+        };
         let (step, t) = ticks(&v, 1000.0, 100e6, 0.0);
         assert!(step >= 80.0 * 100.0 / 100e6);
         assert!(!t.is_empty());
@@ -325,14 +373,20 @@ mod tests {
     #[test]
     fn ticks_count_from_the_origin() {
         // 1 MHz, 100 samples per pixel: a 10 ms step is 10 000 samples; the origin sits at sample 25 000.
-        let v = View { start: 0.0, spp: 125.0 };
+        let v = View {
+            start: 0.0,
+            spp: 125.0,
+        };
         let (step, t) = ticks(&v, 1000.0, 1e6, 25_000.0);
         assert!((step - 0.01).abs() < 1e-12, "{step}");
         // Ticks at samples 5000, 15000, 25000, ... are 10 ms steps counted from the origin.
         assert_eq!(t.first(), Some(&(5_000, -0.02)));
         assert!(t.contains(&(25_000, 0.0)) && t.contains(&(35_000, 0.01)));
         // The ruler never labels samples before the capture starts.
-        let v = View { start: -50_000.0, spp: 500.0 };
+        let v = View {
+            start: -50_000.0,
+            spp: 500.0,
+        };
         let (_, t) = ticks(&v, 1000.0, 1e6, 125_000.0);
         assert!(t.iter().all(|&(s, _)| s as f64 >= 0.0) && t.iter().any(|&(_, time)| time < 0.0));
         // Minor ticks follow the same grid and skip the major ticks.
@@ -383,22 +437,34 @@ mod tests {
     fn entered_scale_becomes_the_grid_step() {
         let rate = 100e6;
         for step in [1e-9, 2e-9, 5e-9, 1e-6, 2e-6, 5e-6, 1e-3, 0.5] {
-            let v = View { start: 0.0, spp: spp_for_step(step, rate).max(MIN_SPP) };
+            let v = View {
+                start: 0.0,
+                spp: spp_for_step(step, rate).max(MIN_SPP),
+            };
             if spp_for_step(step, rate) > MIN_SPP {
-                assert!((scale_step(&v, rate) / step - 1.0).abs() < 1e-6, "step {step}");
+                assert!(
+                    (scale_step(&v, rate) / step - 1.0).abs() < 1e-6,
+                    "step {step}"
+                );
             }
         }
     }
 
     #[test]
     fn minor_ticks_skip_the_major_ones() {
-        let v = View { start: 0.0, spp: 1.0 };
+        let v = View {
+            start: 0.0,
+            spp: 1.0,
+        };
         let (step, major) = ticks(&v, 1000.0, 1e6, 0.0);
         let major: Vec<u64> = major.into_iter().map(|(s, _)| s).collect();
         let minor = minor_ticks(&v, 1000.0, 1e6, 0.0);
         assert!(!minor.is_empty());
         assert!(minor.iter().all(|m| !major.contains(m)));
-        assert_eq!(minor_divisions(step), minor_divisions(1e-4 * 1.0).max(minor_divisions(step)));
+        assert_eq!(
+            minor_divisions(step),
+            minor_divisions(1e-4 * 1.0).max(minor_divisions(step))
+        );
         assert_eq!(minor_divisions(2e-6), 4);
         assert_eq!(minor_divisions(5e-3), 5);
         assert_eq!(minor_divisions(1e-9), 10);

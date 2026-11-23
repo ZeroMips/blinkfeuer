@@ -1,12 +1,12 @@
 //! Headless capture tool: runs a capture into the store and prints statistics.
 
-use clap::{Parser, Subcommand, ValueEnum};
 use bf_core::{CaptureStore, ChannelCount, StoreConfig};
-use bf_device::sim::SimDevice;
 use bf_device::litex::LitexDevice;
-use bf_device::stock::StockDevice;
 use bf_device::session::Session;
+use bf_device::sim::SimDevice;
+use bf_device::stock::StockDevice;
 use bf_device::{CaptureConfig, Device, Pattern, ReadResult};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
@@ -92,7 +92,15 @@ struct CounterCheck {
 
 impl CounterCheck {
     fn new(width: usize) -> Self {
-        Self { width, carry: Vec::new(), prev: None, first: None, samples: 0, breaks: 0, first_break: None }
+        Self {
+            width,
+            carry: Vec::new(),
+            prev: None,
+            first: None,
+            samples: 0,
+            breaks: 0,
+            first_break: None,
+        }
     }
 
     fn feed(&mut self, data: &[u8]) {
@@ -100,7 +108,11 @@ impl CounterCheck {
         self.carry.extend_from_slice(data);
         let whole = self.carry.len() / self.width * self.width;
         for c in self.carry[..whole].chunks_exact(self.width) {
-            let v = if self.width == 1 { c[0] as u32 } else { u16::from_le_bytes([c[0], c[1]]) as u32 };
+            let v = if self.width == 1 {
+                c[0] as u32
+            } else {
+                u16::from_le_bytes([c[0], c[1]]) as u32
+            };
             if let Some(p) = self.prev {
                 if v != (p + 1) & mask {
                     self.breaks += 1;
@@ -124,16 +136,24 @@ fn parse_si(s: &str) -> Result<f64, String> {
         Some('G') => (&s[..s.len() - 1], 1e9),
         _ => (s, 1.0),
     };
-    num.parse::<f64>().map(|v| v * mul).map_err(|e| format!("invalid number '{s}': {e}"))
+    num.parse::<f64>()
+        .map(|v| v * mul)
+        .map_err(|e| format!("invalid number '{s}': {e}"))
 }
 
 fn open_device(name: &str) -> Result<Box<dyn Device>, String> {
     match name {
         "sim" => Ok(Box::new(SimDevice::new(false))),
         "sim-rt" => Ok(Box::new(SimDevice::new(true))),
-        "stock" => StockDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string()),
-        "litex" => LitexDevice::open_first().map(|d| Box::new(d) as Box<dyn Device>).map_err(|e| e.to_string()),
-        other => Err(format!("unknown device '{other}' (available: sim, sim-rt, stock, litex)")),
+        "stock" => StockDevice::open_first()
+            .map(|d| Box::new(d) as Box<dyn Device>)
+            .map_err(|e| e.to_string()),
+        "litex" => LitexDevice::open_first()
+            .map(|d| Box::new(d) as Box<dyn Device>)
+            .map_err(|e| e.to_string()),
+        other => Err(format!(
+            "unknown device '{other}' (available: sim, sim-rt, stock, litex)"
+        )),
     }
 }
 
@@ -163,7 +183,8 @@ fn run(cli: Cli) -> Result<(), String> {
         Cmd::Import { input, out } => {
             let f = std::fs::File::open(&input).map_err(|e| format!("{input}: {e}"))?;
             let t0 = std::time::Instant::now();
-            let c = bf_io::read_sr(std::io::BufReader::new(f)).map_err(|e| format!("{input}: {e}"))?;
+            let c =
+                bf_io::read_sr(std::io::BufReader::new(f)).map_err(|e| format!("{input}: {e}"))?;
             let s = &c.store;
             println!(
                 "{} probes ({} channels in the store), {} MHz, {} samples ({:.3} s), {} events, read in {:.2} s",
@@ -181,12 +202,21 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             if let Some(out) = out {
                 let mut f = std::fs::File::create(&out).map_err(|e| format!("{out}: {e}"))?;
-                bf_io::write_capture(&mut f, s, &serde_json::Value::Null).map_err(|e| format!("{out}: {e}"))?;
+                bf_io::write_capture(&mut f, s, &serde_json::Value::Null)
+                    .map_err(|e| format!("{out}: {e}"))?;
                 println!("written to {out}");
             }
             Ok(())
         }
-        Cmd::Stream { device, channels, rate, samples, seconds, pattern, verify } => {
+        Cmd::Stream {
+            device,
+            channels,
+            rate,
+            samples,
+            seconds,
+            pattern,
+            verify,
+        } => {
             let ch = ChannelCount::new(channels).ok_or("channels must be 2, 4, 8, 16 or 32")?;
             let mut dev = open_device(&device)?;
             let cfg = CaptureConfig {
@@ -238,16 +268,30 @@ fn run(cli: Cli) -> Result<(), String> {
             let wall = t0.elapsed().as_secs_f64();
             let report = st.stop().map_err(|e| e.to_string())?;
             println!("device     : {}", dev.info().name);
-            println!("config     : {} ch @ {} MHz, pattern {}", channels, rate / 1e6, cfg.pattern.name());
+            println!(
+                "config     : {} ch @ {} MHz, pattern {}",
+                channels,
+                rate / 1e6,
+                cfg.pattern.name()
+            );
             let expect = cfg.limit_samples.map(|n| ch.bytes_for(n));
             println!(
                 "wire bytes : {} ({:.1} MB/s over {:.2} s){}",
                 bytes,
                 bytes as f64 / wall / 1e6,
                 wall,
-                expect.map_or(String::new(), |e| format!(", expected {e}: {}", if e == bytes { "exact" } else { "MISMATCH" }))
+                expect.map_or(String::new(), |e| format!(
+                    ", expected {e}: {}",
+                    if e == bytes { "exact" } else { "MISMATCH" }
+                ))
             );
-            println!("head       : {}", head.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "));
+            println!(
+                "head       : {}",
+                head.iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
             if let Some(n) = &report.note {
                 println!("transfers  : {n}");
             }
@@ -258,7 +302,9 @@ fn run(cli: Cli) -> Result<(), String> {
                     check.samples,
                     check.first.unwrap_or(0),
                     check.breaks,
-                    check.first_break.map_or(String::new(), |(i, p, v)| format!(" (first at sample {i}: {p} -> {v})"))
+                    check.first_break.map_or(String::new(), |(i, p, v)| format!(
+                        " (first at sample {i}: {p} -> {v})"
+                    ))
                 );
                 bad |= check.breaks > 0;
             }
@@ -270,8 +316,17 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Capture { device, channels, rate, samples, seconds, pattern, max_mem } => {
-            let channels = ChannelCount::new(channels).ok_or("channels must be 2, 4, 8, 16 or 32")?;
+        Cmd::Capture {
+            device,
+            channels,
+            rate,
+            samples,
+            seconds,
+            pattern,
+            max_mem,
+        } => {
+            let channels =
+                ChannelCount::new(channels).ok_or("channels must be 2, 4, 8, 16 or 32")?;
             let mut dev = open_device(&device)?;
             let mut scfg = StoreConfig::new(channels, rate);
             scfg.max_bytes = max_mem as usize;
@@ -289,7 +344,8 @@ fn run(cli: Cli) -> Result<(), String> {
                 threshold_v: 1.7,
             };
             let t0 = Instant::now();
-            let session = Session::start(dev.as_mut(), &cfg, store.clone()).map_err(|e| e.to_string())?;
+            let session =
+                Session::start(dev.as_mut(), &cfg, store.clone()).map_err(|e| e.to_string())?;
             if cfg.limit_samples.is_none() {
                 std::thread::sleep(Duration::from_secs_f64(seconds));
                 session.request_stop();
@@ -298,10 +354,28 @@ fn run(cli: Cli) -> Result<(), String> {
             let wall = t0.elapsed().as_secs_f64();
             let s = store.read();
             println!("device     : {}", dev.info().name);
-            println!("config     : {} ch @ {} MHz, pattern {}", channels.get(), rate / 1e6, cfg.pattern.name());
-            println!("samples    : {} ({:.3} s of signal)", res.samples, res.samples as f64 / rate);
-            println!("wire bytes : {} ({:.1} MB/s over {:.2} s)", res.bytes, res.bytes as f64 / wall / 1e6, wall);
-            println!("stored     : {:?} (first sample {})", s.range(), s.first_sample());
+            println!(
+                "config     : {} ch @ {} MHz, pattern {}",
+                channels.get(),
+                rate / 1e6,
+                cfg.pattern.name()
+            );
+            println!(
+                "samples    : {} ({:.3} s of signal)",
+                res.samples,
+                res.samples as f64 / rate
+            );
+            println!(
+                "wire bytes : {} ({:.1} MB/s over {:.2} s)",
+                res.bytes,
+                res.bytes as f64 / wall / 1e6,
+                wall
+            );
+            println!(
+                "stored     : {:?} (first sample {})",
+                s.range(),
+                s.first_sample()
+            );
             println!(
                 "memory     : {:.2} MB for {} events ({:.4} bytes/sample)",
                 s.memory_bytes() as f64 / 1e6,

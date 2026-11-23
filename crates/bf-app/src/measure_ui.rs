@@ -41,7 +41,13 @@ pub struct MeasureState {
 }
 
 /// The range to measure, in samples.
-fn range_of(scope: Scope, store: &CaptureStore, view: &View, plot_width: f64, markers: &Markers) -> Option<(u64, u64)> {
+fn range_of(
+    scope: Scope,
+    store: &CaptureStore,
+    view: &View,
+    plot_width: f64,
+    markers: &Markers,
+) -> Option<(u64, u64)> {
     let all = store.range();
     match scope {
         Scope::All => Some((all.start, all.end)),
@@ -70,18 +76,29 @@ fn stat_cells(s: &Stat, rate: f64) -> [String; 3] {
 fn csv(rows: &[(String, Option<Measurement>)], rate: f64) -> String {
     let mut out = String::from("channel,edges,rising,falling,frequency_hz,period_s,duty,high_min_s,high_mean_s,high_max_s,low_min_s,low_mean_s,low_max_s\n");
     for (name, m) in rows {
-        let name = if name.contains([',', '"']) { format!("\"{}\"", name.replace('"', "\"\"")) } else { name.clone() };
+        let name = if name.contains([',', '"']) {
+            format!("\"{}\"", name.replace('"', "\"\""))
+        } else {
+            name.clone()
+        };
         let Some(m) = m else { continue };
         let num = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.9e}"));
         let d = m.detail;
         let period = m.period_samples().map(|p| p / rate);
         let stat = |s: Option<&Stat>| -> [String; 3] {
             match s.filter(|s| s.count > 0) {
-                Some(s) => [num(Some(s.min as f64 / rate)), num(s.mean().map(|v| v / rate)), num(Some(s.max as f64 / rate))],
+                Some(s) => [
+                    num(Some(s.min as f64 / rate)),
+                    num(s.mean().map(|v| v / rate)),
+                    num(Some(s.max as f64 / rate)),
+                ],
                 None => [String::new(), String::new(), String::new()],
             }
         };
-        let (h, l) = (stat(d.as_ref().map(|d| &d.high)), stat(d.as_ref().map(|d| &d.low)));
+        let (h, l) = (
+            stat(d.as_ref().map(|d| &d.high)),
+            stat(d.as_ref().map(|d| &d.low)),
+        );
         out.push_str(&format!(
             "{name},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             m.edges,
@@ -223,23 +240,66 @@ mod tests {
     #[test]
     fn scopes_pick_the_range() {
         let s = store();
-        let v = View { start: 100.0, spp: 1.0 };
-        let m = Markers { m1: Some(300.5), m2: Some(200.0) };
+        let v = View {
+            start: 100.0,
+            spp: 1.0,
+        };
+        let m = Markers {
+            m1: Some(300.5),
+            m2: Some(200.0),
+        };
         assert_eq!(range_of(Scope::All, &s, &v, 400.0, &m), Some((0, 1000)));
-        assert_eq!(range_of(Scope::Visible, &s, &v, 400.0, &m), Some((100, 500)));
-        assert_eq!(range_of(Scope::Markers, &s, &v, 400.0, &m), Some((200, 301)), "either order, rounded outwards");
-        assert_eq!(range_of(Scope::Markers, &s, &v, 400.0, &Markers::default()), None);
+        assert_eq!(
+            range_of(Scope::Visible, &s, &v, 400.0, &m),
+            Some((100, 500))
+        );
+        assert_eq!(
+            range_of(Scope::Markers, &s, &v, 400.0, &m),
+            Some((200, 301)),
+            "either order, rounded outwards"
+        );
+        assert_eq!(
+            range_of(Scope::Markers, &s, &v, 400.0, &Markers::default()),
+            None
+        );
         // A window scrolled past the data has nothing to measure.
-        assert_eq!(range_of(Scope::Visible, &s, &View { start: 5000.0, spp: 1.0 }, 400.0, &m), None);
+        assert_eq!(
+            range_of(
+                Scope::Visible,
+                &s,
+                &View {
+                    start: 5000.0,
+                    spp: 1.0
+                },
+                400.0,
+                &m
+            ),
+            None
+        );
         // The window is clipped to the capture.
-        assert_eq!(range_of(Scope::Visible, &s, &View { start: -50.0, spp: 1.0 }, 100.0, &m), Some((0, 50)));
+        assert_eq!(
+            range_of(
+                Scope::Visible,
+                &s,
+                &View {
+                    start: -50.0,
+                    spp: 1.0
+                },
+                100.0,
+                &m
+            ),
+            Some((0, 50))
+        );
     }
 
     #[test]
     fn csv_has_plain_numbers_and_quotes_names() {
         let s = store();
         let m0 = measure(&s, 0, 0..1000);
-        let rows = vec![("A,B".to_string(), m0), ("C".to_string(), measure(&s, 1, 0..1000))];
+        let rows = vec![
+            ("A,B".to_string(), m0),
+            ("C".to_string(), measure(&s, 1, 0..1000)),
+        ];
         let text = csv(&rows, 1e6);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 3);

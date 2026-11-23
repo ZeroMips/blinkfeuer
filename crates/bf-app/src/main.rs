@@ -86,7 +86,10 @@ impl Opts {
 }
 
 fn parse_opts() -> Opts {
-    let mut o = Opts { after: 2.0, ..Default::default() };
+    let mut o = Opts {
+        after: 2.0,
+        ..Default::default()
+    };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut val = || args.next().unwrap_or_else(|| panic!("{a} needs a value"));
@@ -126,7 +129,9 @@ fn parse_opts() -> Opts {
             "--search" => o.search = Some(val()),
             "--table-lane" => o.table_lane = Some(val().parse().expect("--table-lane N")),
             "--goto" => o.goto = Some(val().parse().expect("--goto INDEX")),
-            "--decoder-setup" => o.decoders_window = Some(val().parse().expect("--decoder-setup INDEX")),
+            "--decoder-setup" => {
+                o.decoders_window = Some(val().parse().expect("--decoder-setup INDEX"))
+            }
             "--row-height" => o.row_height = Some(val().parse().expect("--row-height POINTS")),
             "--hover" => {
                 let v = val();
@@ -136,7 +141,9 @@ fn parse_opts() -> Opts {
             "--channels" => o.channels = Some(val().parse().expect("--channels N")),
             "-h" | "--help" => {
                 println!("blinkfeuer [--demo] [--samples N] [--rate HZ] [--channels N] [--device sim|stock] [--pattern generator|counter|inputs|emulation]");
-                println!("          [--screenshot PATH [--after SECS]] [--zoom-start S --zoom-spp P]");
+                println!(
+                    "          [--screenshot PATH [--after SECS]] [--zoom-start S --zoom-spp P]"
+                );
                 println!("          [--markers S1,S2] [--expand] [--setup]");
                 std::process::exit(0);
             }
@@ -149,8 +156,14 @@ fn parse_opts() -> Opts {
 fn main() -> eframe::Result {
     let opts = parse_opts();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]).with_title("Blinkfeuer"),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 800.0])
+            .with_title("Blinkfeuer"),
         ..Default::default()
     };
-    eframe::run_native("Blinkfeuer", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, opts.clone())))))
+    eframe::run_native(
+        "Blinkfeuer",
+        options,
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, opts.clone())))),
+    )
 }

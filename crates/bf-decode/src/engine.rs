@@ -22,7 +22,11 @@ pub struct Runner {
 
 impl Runner {
     pub fn new(decoder: Box<dyn Decoder>) -> Self {
-        Self { decoder, decoded_to: 0, primed: false }
+        Self {
+            decoder,
+            decoded_to: 0,
+            primed: false,
+        }
     }
 
     pub fn decoder(&self) -> &dyn Decoder {
@@ -43,7 +47,12 @@ impl Runner {
     /// Decode up to `budget` further samples. `None`: nothing new. `Some(restarted)`: progress was
     /// made; when `restarted` the decoder began again (new capture, or its data was evicted) and
     /// earlier annotations are stale.
-    pub fn pump(&mut self, store: &CaptureStore, budget: u64, out: &mut Vec<Annotation>) -> Option<bool> {
+    pub fn pump(
+        &mut self,
+        store: &CaptureStore,
+        budget: u64,
+        out: &mut Vec<Annotation>,
+    ) -> Option<bool> {
         let (first, end) = (store.first_sample(), store.end());
         if end == first {
             return None;
@@ -55,14 +64,17 @@ impl Runner {
             self.decoded_to = first;
             restarted = true;
             // The first sample is the initial state, not a change.
-            self.decoder.change(first, store.state_at(first).unwrap_or(0), out);
+            self.decoder
+                .change(first, store.state_at(first).unwrap_or(0), out);
         }
         if self.decoded_to >= end {
             return restarted.then_some(true);
         }
         let to = end.min(self.decoded_to.saturating_add(budget.max(1)));
         let dec = &mut self.decoder;
-        store.changes(dec.mask(), self.decoded_to..to, |p, state| dec.change(p, state, out));
+        store.changes(dec.mask(), self.decoded_to..to, |p, state| {
+            dec.change(p, state, out)
+        });
         dec.advance(to, out);
         self.decoded_to = to;
         Some(restarted)
@@ -133,7 +145,10 @@ impl Engine {
             next_id: AtomicU32::new(1),
         });
         let s2 = shared.clone();
-        let thread = std::thread::Builder::new().name("decode".into()).spawn(move || worker(s2)).ok();
+        let thread = std::thread::Builder::new()
+            .name("decode".into())
+            .spawn(move || worker(s2))
+            .ok();
         Self { shared, thread }
     }
 
@@ -153,8 +168,20 @@ impl Engine {
         let lane_used = (0..lanes.len()).map(|l| decoder.lane_used(l)).collect();
         let anns = Arc::new(RwLock::new(AnnStore::new(lanes.len())));
         let progress = Arc::new(AtomicU64::new(0));
-        let handle = DecoderHandle { id, name: decoder.name(), lanes, lane_used, anns: anns.clone(), progress: progress.clone() };
-        self.shared.slots.lock().push(Slot { id, runner: Runner::new(decoder), anns, progress });
+        let handle = DecoderHandle {
+            id,
+            name: decoder.name(),
+            lanes,
+            lane_used,
+            anns: anns.clone(),
+            progress: progress.clone(),
+        };
+        self.shared.slots.lock().push(Slot {
+            id,
+            runner: Runner::new(decoder),
+            anns,
+            progress,
+        });
         handle
     }
 
@@ -164,9 +191,15 @@ impl Engine {
 
     /// True while some decoder has not caught up with the capture.
     pub fn busy(&self) -> bool {
-        let Some(store) = self.shared.store.lock().clone() else { return false };
+        let Some(store) = self.shared.store.lock().clone() else {
+            return false;
+        };
         let end = store.read().end();
-        self.shared.slots.lock().iter().any(|s| s.progress.load(Ordering::Relaxed) < end)
+        self.shared
+            .slots
+            .lock()
+            .iter()
+            .any(|s| s.progress.load(Ordering::Relaxed) < end)
     }
 }
 
@@ -201,7 +234,8 @@ fn worker(shared: Arc<Shared>) {
                         anns.push(a);
                     }
                     anns.drop_before(first);
-                    slot.progress.store(slot.runner.decoded_to(), Ordering::Relaxed);
+                    slot.progress
+                        .store(slot.runner.decoded_to(), Ordering::Relaxed);
                 }
             }
         }

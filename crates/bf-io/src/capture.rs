@@ -15,10 +15,10 @@
 //! store's own representation, so the file is as small as the capture is quiet, and loading costs
 //! time proportional to the number of events.
 
+use bf_core::{CaptureStore, ChannelCount, StoreConfig};
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::{Compression, Crc};
-use bf_core::{CaptureStore, ChannelCount, StoreConfig};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
@@ -91,7 +91,11 @@ fn put_varint(buf: &mut Vec<u8>, mut v: u64) {
 }
 
 /// Write the stored part of `store` and the application `setup` to `w`.
-pub fn write_capture<W: Write + Seek>(w: &mut W, store: &CaptureStore, setup: &serde_json::Value) -> Result<(), Error> {
+pub fn write_capture<W: Write + Seek>(
+    w: &mut W,
+    store: &CaptureStore,
+    setup: &serde_json::Value,
+) -> Result<(), Error> {
     let first = store.first_sample();
     let header = Header {
         sample_rate: store.sample_rate(),
@@ -192,7 +196,8 @@ fn push_run(store: &mut CaptureStore, state: u32, mut n: u64, buf: &mut [u32]) {
 pub fn read_capture<R: Read>(r: R) -> Result<Loaded, Error> {
     let mut r = BufReader::with_capacity(1 << 16, r);
     let mut head = [0u8; 32];
-    r.read_exact(&mut head).map_err(|_| Error::Format("not a blinkfeuer capture file".into()))?;
+    r.read_exact(&mut head)
+        .map_err(|_| Error::Format("not a blinkfeuer capture file".into()))?;
     if &head[..8] != MAGIC {
         return bad("not a blinkfeuer capture file");
     }
@@ -208,9 +213,12 @@ pub fn read_capture<R: Read>(r: R) -> Result<Loaded, Error> {
     }
     let mut json = vec![0u8; json_len];
     r.read_exact(&mut json)?;
-    let h: Header = serde_json::from_slice(&json).map_err(|e| Error::Format(format!("damaged file header: {e}")))?;
+    let h: Header = serde_json::from_slice(&json)
+        .map_err(|e| Error::Format(format!("damaged file header: {e}")))?;
 
-    let Some(channels) = ChannelCount::new(h.channels) else { return bad(format!("{} channels is not supported", h.channels)) };
+    let Some(channels) = ChannelCount::new(h.channels) else {
+        return bad(format!("{} channels is not supported", h.channels));
+    };
     if !(h.sample_rate.is_finite() && h.sample_rate > 0.0) {
         return bad("damaged file header (sample rate)");
     }
@@ -221,7 +229,10 @@ pub fn read_capture<R: Read>(r: R) -> Result<Loaded, Error> {
     cfg.max_bytes = usize::MAX / 2; // a saved capture is loaded completely
     let mut store = CaptureStore::new_at(cfg, h.first_sample);
 
-    let mut ev = CrcReader { inner: BufReader::with_capacity(1 << 16, DeflateDecoder::new(r)), crc: Crc::new() };
+    let mut ev = CrcReader {
+        inner: BufReader::with_capacity(1 << 16, DeflateDecoder::new(r)),
+        crc: Crc::new(),
+    };
     let mut buf = vec![0u32; 1 << 16];
     let (mut pos, mut state) = (h.first_sample, h.initial_state);
     for _ in 0..count {
@@ -242,7 +253,10 @@ pub fn read_capture<R: Read>(r: R) -> Result<Loaded, Error> {
     if ev.crc.sum() != crc_expected {
         return bad("the capture data is damaged (checksum mismatch)");
     }
-    Ok(Loaded { store, setup: h.setup })
+    Ok(Loaded {
+        store,
+        setup: h.setup,
+    })
 }
 
 #[cfg(test)]
@@ -296,7 +310,14 @@ mod tests {
 
     #[test]
     fn captures_survive_a_round_trip() {
-        for (n, quiet) in [(1usize, 1u32), (2, 1), (1000, 1), (5000, 7), (20_000, 400), (9000, 1_000_000)] {
+        for (n, quiet) in [
+            (1usize, 1u32),
+            (2, 1),
+            (1000, 1),
+            (5000, 7),
+            (20_000, 400),
+            (9000, 1_000_000),
+        ] {
             let src = store_from(&pseudo(n, n as u32, quiet), 16, 0);
             let l = roundtrip(&src, serde_json::json!({"hello": [1, 2, 3]}));
             same(&src, &l.store);
@@ -336,7 +357,11 @@ mod tests {
         }
         let mut file = Cursor::new(Vec::new());
         write_capture(&mut file, &s, &serde_json::Value::Null).unwrap();
-        assert!(file.get_ref().len() < 2000, "{} bytes", file.get_ref().len());
+        assert!(
+            file.get_ref().len() < 2000,
+            "{} bytes",
+            file.get_ref().len()
+        );
         same(&s, &read_capture(&file.get_ref()[..]).unwrap().store);
     }
 
@@ -387,6 +412,9 @@ mod tests {
         same(&src, &l.store);
         // Without a trigger there is none after loading either.
         let plain = store_from(&pseudo(100, 1, 2), 16, 0);
-        assert_eq!(roundtrip(&plain, serde_json::Value::Null).store.trigger(), None);
+        assert_eq!(
+            roundtrip(&plain, serde_json::Value::Null).store.trigger(),
+            None
+        );
     }
 }

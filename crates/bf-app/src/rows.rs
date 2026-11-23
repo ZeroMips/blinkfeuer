@@ -100,7 +100,10 @@ pub enum RowKind {
     /// Index into `Layout::items`.
     Group(usize),
     /// A lane of a protocol decoder (rows are added by the application after the signal rows).
-    Decode { id: u32, lane: u8 },
+    Decode {
+        id: u32,
+        lane: u8,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,8 +167,14 @@ impl Layout {
     /// Whether a layout read from a file is consistent for `channels` channels: one name, colour and
     /// visibility per channel, every channel in exactly one place, bus ids unique.
     pub fn check(&self, channels: usize) -> Result<(), String> {
-        if self.names.len() != channels || self.visible.len() != channels || self.colors.len() != channels {
-            return Err(format!("the layout is for {} channels, not {channels}", self.names.len()));
+        if self.names.len() != channels
+            || self.visible.len() != channels
+            || self.colors.len() != channels
+        {
+            return Err(format!(
+                "the layout is for {} channels, not {channels}",
+                self.names.len()
+            ));
         }
         let mut seen = vec![false; channels];
         let mut take = |ch: u8| -> Result<(), String> {
@@ -234,7 +243,11 @@ impl Layout {
             }
         }
         self.items = items;
-        self.hidden_decoders = self.hidden_decoders.iter().filter_map(|d| map.get(d).copied()).collect();
+        self.hidden_decoders = self
+            .hidden_decoders
+            .iter()
+            .filter_map(|d| map.get(d).copied())
+            .collect();
     }
 
     /// Give every decoder in `ids` that has no place yet a row at the end of the top level.
@@ -254,8 +267,22 @@ impl Layout {
     /// Names and one bus for the simulator's generator pattern.
     pub fn generator(channels: usize) -> Self {
         const NAMES: [&str; 16] = [
-            "UART", "SPI CS#", "SPI SCK", "SPI MOSI", "I2C SCL", "I2C SDA", "PWM", "CLK 1 MHz", "GRAY0", "GRAY1",
-            "GRAY2", "GRAY3", "GRAY4", "GRAY5", "GRAY6", "GRAY7",
+            "UART",
+            "SPI CS#",
+            "SPI SCK",
+            "SPI MOSI",
+            "I2C SCL",
+            "I2C SDA",
+            "PWM",
+            "CLK 1 MHz",
+            "GRAY0",
+            "GRAY1",
+            "GRAY2",
+            "GRAY3",
+            "GRAY4",
+            "GRAY5",
+            "GRAY6",
+            "GRAY7",
         ];
         let mut l = Self::new(channels);
         for (i, n) in l.names.iter_mut().enumerate() {
@@ -265,7 +292,8 @@ impl Layout {
         }
         if channels == 16 {
             let members: Vec<u8> = (8..16).rev().collect();
-            l.add_bus("GRAY", members, Radix::Hex).expect("generator bus");
+            l.add_bus("GRAY", members, Radix::Hex)
+                .expect("generator bus");
         }
         l
     }
@@ -273,7 +301,14 @@ impl Layout {
     /// Names and one bus for the gateware's own generator pattern: CH0 UART, CH1-3 SPI, CH4 PWM, CH5 the
     /// 100 MHz clock, CH6-15 a 10-bit Gray counter.
     pub fn litex_generator(channels: usize) -> Self {
-        const NAMES: [&str; 6] = ["UART", "SPI CS#", "SPI SCK", "SPI MOSI", "PWM", "CLK 100 MHz"];
+        const NAMES: [&str; 6] = [
+            "UART",
+            "SPI CS#",
+            "SPI SCK",
+            "SPI MOSI",
+            "PWM",
+            "CLK 100 MHz",
+        ];
         let mut l = Self::new(channels);
         for (i, n) in l.names.iter_mut().enumerate() {
             *n = match NAMES.get(i) {
@@ -283,7 +318,8 @@ impl Layout {
         }
         if channels == 16 {
             let members: Vec<u8> = (6..16).rev().collect();
-            l.add_bus("GRAY", members, Radix::Hex).expect("generator bus");
+            l.add_bus("GRAY", members, Radix::Hex)
+                .expect("generator bus");
         }
         l
     }
@@ -300,20 +336,32 @@ impl Layout {
             if self.hidden_decoders.contains(&id) {
                 return;
             }
-            out.extend(lanes(id).into_iter().map(|lane| Row { kind: RowKind::Decode { id, lane }, depth, owner }));
+            out.extend(lanes(id).into_iter().map(|lane| Row {
+                kind: RowKind::Decode { id, lane },
+                depth,
+                owner,
+            }));
         };
         let bus = |out: &mut Vec<Row>, i: usize, depth: u8, owner: Option<usize>| {
             let Some(b) = self.bus(i) else { return };
             if !b.shown {
                 return;
             }
-            out.push(Row { kind: RowKind::Bus(i), depth, owner });
+            out.push(Row {
+                kind: RowKind::Bus(i),
+                depth,
+                owner,
+            });
             if b.expanded {
                 out.extend(
                     b.members
                         .iter()
                         .filter(|&&ch| self.visible.get(ch as usize).copied().unwrap_or(false))
-                        .map(|&ch| Row { kind: RowKind::Signal(ch), depth: depth + 1, owner: Some(i) }),
+                        .map(|&ch| Row {
+                            kind: RowKind::Signal(ch),
+                            depth: depth + 1,
+                            owner: Some(i),
+                        }),
                 );
             }
         };
@@ -321,7 +369,11 @@ impl Layout {
             match item {
                 Item::Signal(ch) => {
                     if self.visible.get(*ch as usize).copied().unwrap_or(false) {
-                        out.push(Row { kind: RowKind::Signal(*ch), depth: 0, owner: None });
+                        out.push(Row {
+                            kind: RowKind::Signal(*ch),
+                            depth: 0,
+                            owner: None,
+                        });
                     }
                 }
                 Item::Bus(b) => {
@@ -333,13 +385,23 @@ impl Layout {
                     if !g.shown {
                         continue;
                     }
-                    out.push(Row { kind: RowKind::Group(i), depth: 0, owner: None });
+                    out.push(Row {
+                        kind: RowKind::Group(i),
+                        depth: 0,
+                        owner: None,
+                    });
                     if g.expanded {
                         out.extend(
                             g.members
                                 .iter()
-                                .filter(|&&ch| self.visible.get(ch as usize).copied().unwrap_or(false))
-                                .map(|&ch| Row { kind: RowKind::Signal(ch), depth: 1, owner: Some(i) }),
+                                .filter(|&&ch| {
+                                    self.visible.get(ch as usize).copied().unwrap_or(false)
+                                })
+                                .map(|&ch| Row {
+                                    kind: RowKind::Signal(ch),
+                                    depth: 1,
+                                    owner: Some(i),
+                                }),
                         );
                         for &id in &g.buses {
                             if let Some(bi) = self.bus_index(id) {
@@ -359,16 +421,30 @@ impl Layout {
 
     /// Index in `items` of the bus with this id.
     pub fn bus_index(&self, id: u32) -> Option<usize> {
-        self.items.iter().position(|it| matches!(it, Item::Bus(b) if b.id == id))
+        self.items
+            .iter()
+            .position(|it| matches!(it, Item::Bus(b) if b.id == id))
     }
 
     /// Index in `items` of the group that holds the bus with this id.
     pub fn group_index_of_bus(&self, id: u32) -> Option<usize> {
-        self.items.iter().position(|it| matches!(it, Item::Group(g) if g.buses.contains(&id)))
+        self.items
+            .iter()
+            .position(|it| matches!(it, Item::Group(g) if g.buses.contains(&id)))
     }
 
     fn next_bus_id(&self) -> u32 {
-        self.items.iter().filter_map(|it| if let Item::Bus(b) = it { Some(b.id + 1) } else { None }).max().unwrap_or(0)
+        self.items
+            .iter()
+            .filter_map(|it| {
+                if let Item::Bus(b) = it {
+                    Some(b.id + 1)
+                } else {
+                    None
+                }
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     pub fn bus(&self, item: usize) -> Option<&Bus> {
@@ -421,11 +497,18 @@ impl Layout {
 
     /// A decoder was rebuilt under a new id: it keeps its place.
     pub fn replace_decoder(&mut self, old: u32, new: u32) {
-        self.hidden_decoders.iter_mut().filter(|d| **d == old).for_each(|d| *d = new);
+        self.hidden_decoders
+            .iter_mut()
+            .filter(|d| **d == old)
+            .for_each(|d| *d = new);
         for it in &mut self.items {
             match it {
                 Item::Decoder(d) if *d == old => *d = new,
-                Item::Group(g) => g.decoders.iter_mut().filter(|d| **d == old).for_each(|d| *d = new),
+                Item::Group(g) => g
+                    .decoders
+                    .iter_mut()
+                    .filter(|d| **d == old)
+                    .for_each(|d| *d = new),
                 _ => {}
             }
         }
@@ -460,10 +543,31 @@ impl Layout {
             Some(Loc::In(g, _)) => g + 1,
             None => return false,
         };
-        let n = self.items.iter().filter(|it| matches!(it, Item::Group(_))).count() + 1;
+        let n = self
+            .items
+            .iter()
+            .filter(|it| matches!(it, Item::Group(_)))
+            .count()
+            + 1;
         let name = format!("Group {n}");
-        self.items.insert(at, Item::Group(Group { name, members: Vec::new(), decoders: Vec::new(), buses: Vec::new(), expanded: true, shown: true }));
-        self.move_to(m, Dest::Group { item: at, pos: usize::MAX })
+        self.items.insert(
+            at,
+            Item::Group(Group {
+                name,
+                members: Vec::new(),
+                decoders: Vec::new(),
+                buses: Vec::new(),
+                expanded: true,
+                shown: true,
+            }),
+        );
+        self.move_to(
+            m,
+            Dest::Group {
+                item: at,
+                pos: usize::MAX,
+            },
+        )
     }
 
     /// The group a signal or decoder sits in, if any.
@@ -478,7 +582,9 @@ impl Layout {
     pub fn mover_of(&self, row: &Row) -> Option<Mover> {
         match row.kind {
             RowKind::Signal(ch) => {
-                let in_bus = row.owner.is_some_and(|o| matches!(self.items.get(o), Some(Item::Bus(_))));
+                let in_bus = row
+                    .owner
+                    .is_some_and(|o| matches!(self.items.get(o), Some(Item::Bus(_))));
                 (!in_bus).then_some(Mover::Signal(ch))
             }
             RowKind::Bus(i) => Some(Mover::Bus(i)),
@@ -491,25 +597,41 @@ impl Layout {
         match m {
             Mover::Signal(ch) => self.items.iter().enumerate().find_map(|(i, it)| match it {
                 Item::Signal(c) if *c == ch => Some(Loc::Top(i)),
-                Item::Group(g) => g.members.iter().position(|c| *c == ch).map(|p| Loc::In(i, p)),
+                Item::Group(g) => g
+                    .members
+                    .iter()
+                    .position(|c| *c == ch)
+                    .map(|p| Loc::In(i, p)),
                 _ => None,
             }),
             Mover::Decoder(id) => self.items.iter().enumerate().find_map(|(i, it)| match it {
                 Item::Decoder(d) if *d == id => Some(Loc::Top(i)),
-                Item::Group(g) => g.decoders.iter().position(|d| *d == id).map(|p| Loc::In(i, p)),
+                Item::Group(g) => g
+                    .decoders
+                    .iter()
+                    .position(|d| *d == id)
+                    .map(|p| Loc::In(i, p)),
                 _ => None,
             }),
             Mover::Bus(i) => {
-                let Some(Item::Bus(b)) = self.items.get(i) else { return None };
+                let Some(Item::Bus(b)) = self.items.get(i) else {
+                    return None;
+                };
                 match self.group_index_of_bus(b.id) {
                     Some(g) => match self.items.get(g) {
-                        Some(Item::Group(grp)) => grp.buses.iter().position(|x| *x == b.id).map(|p| Loc::In(g, p)),
+                        Some(Item::Group(grp)) => grp
+                            .buses
+                            .iter()
+                            .position(|x| *x == b.id)
+                            .map(|p| Loc::In(g, p)),
                         _ => None,
                     },
                     None => Some(Loc::Top(i)),
                 }
             }
-            Mover::Group(i) => matches!(self.items.get(i), Some(Item::Group(_))).then_some(Loc::Top(i)),
+            Mover::Group(i) => {
+                matches!(self.items.get(i), Some(Item::Group(_))).then_some(Loc::Top(i))
+            }
         }
     }
 
@@ -517,16 +639,22 @@ impl Layout {
         match dest {
             Dest::Top(i) if i > self.items.len() => return false,
             Dest::Group { item, .. } => {
-                if !matches!(self.items.get(item), Some(Item::Group(_))) || matches!(m, Mover::Group(_)) {
+                if !matches!(self.items.get(item), Some(Item::Group(_)))
+                    || matches!(m, Mover::Group(_))
+                {
                     return false;
                 }
             }
             _ => {}
         }
-        let Some(from) = self.locate(m) else { return false };
+        let Some(from) = self.locate(m) else {
+            return false;
+        };
         // A bus stays in `items`; whether it is inside a group is the group's list of bus ids.
         if let Mover::Bus(i) = m {
-            let Some(Item::Bus(b)) = self.items.get(i) else { return false };
+            let Some(Item::Bus(b)) = self.items.get(i) else {
+                return false;
+            };
             let id = b.id;
             let mut dest = dest;
             if let Loc::In(g, p) = from {
@@ -564,7 +692,9 @@ impl Layout {
                 it
             }
             Loc::In(g, p) => {
-                let Some(Item::Group(grp)) = self.items.get_mut(g) else { return false };
+                let Some(Item::Group(grp)) = self.items.get_mut(g) else {
+                    return false;
+                };
                 let it = match m {
                     Mover::Signal(_) => Item::Signal(grp.members.remove(p)),
                     _ => Item::Decoder(grp.decoders.remove(p)),
@@ -595,32 +725,48 @@ impl Layout {
     pub fn drop_gap(&self, rows: &[Row], m: Mover, gap: usize) -> Option<Dest> {
         let mut gap = gap.min(rows.len());
         // The lanes of one decoder belong together: a gap between them means "after the decoder".
-        if let Some(Row { kind: RowKind::Decode { id, .. }, .. }) = gap.checked_sub(1).and_then(|g| rows.get(g)) {
-            while matches!(rows.get(gap), Some(Row { kind: RowKind::Decode { id: j, .. }, .. }) if j == id) {
+        if let Some(Row {
+            kind: RowKind::Decode { id, .. },
+            ..
+        }) = gap.checked_sub(1).and_then(|g| rows.get(g))
+        {
+            while matches!(rows.get(gap), Some(Row { kind: RowKind::Decode { id: j, .. }, .. }) if j == id)
+            {
                 gap += 1;
             }
         }
         // Likewise a bus and its expanded members.
-        if let Some(Row { kind: RowKind::Bus(b), .. }) = gap.checked_sub(1).and_then(|g| rows.get(g)) {
-            while matches!(rows.get(gap), Some(Row { owner: Some(o), kind: RowKind::Signal(_), .. }) if o == b) {
+        if let Some(Row {
+            kind: RowKind::Bus(b),
+            ..
+        }) = gap.checked_sub(1).and_then(|g| rows.get(g))
+        {
+            while matches!(rows.get(gap), Some(Row { owner: Some(o), kind: RowKind::Signal(_), .. }) if o == b)
+            {
                 gap += 1;
             }
         }
         match rows.get(gap) {
             Some(next) if next.depth > 0 => {
                 let gi = next.owner?;
-                let Some(Item::Group(g)) = self.items.get(gi) else { return None };
+                let Some(Item::Group(g)) = self.items.get(gi) else {
+                    return None;
+                };
                 let bus_pos = |i: usize| match self.items.get(i) {
                     Some(Item::Bus(b)) => g.buses.iter().position(|x| *x == b.id),
                     _ => None,
                 };
                 let pos = match (m, next.kind) {
-                    (Mover::Signal(_), RowKind::Signal(ch)) => g.members.iter().position(|c| *c == ch)?,
+                    (Mover::Signal(_), RowKind::Signal(ch)) => {
+                        g.members.iter().position(|c| *c == ch)?
+                    }
                     (Mover::Signal(_), _) => g.members.len(),
                     (Mover::Bus(_), RowKind::Bus(i)) => bus_pos(i)?,
                     (Mover::Bus(_), RowKind::Decode { .. }) => g.buses.len(),
                     (Mover::Bus(_), _) => 0,
-                    (Mover::Decoder(_), RowKind::Decode { id, .. }) => g.decoders.iter().position(|d| *d == id)?,
+                    (Mover::Decoder(_), RowKind::Decode { id, .. }) => {
+                        g.decoders.iter().position(|d| *d == id)?
+                    }
                     (Mover::Decoder(_), _) => 0,
                     _ => return None,
                 };
@@ -634,14 +780,22 @@ impl Layout {
     /// Dropping on the middle of a group header puts a signal or decoder at the end of the group.
     pub fn drop_onto(&self, row: &Row, m: Mover) -> Option<Dest> {
         match (row.kind, m) {
-            (RowKind::Group(i), Mover::Signal(_) | Mover::Decoder(_) | Mover::Bus(_)) if row.depth == 0 => Some(Dest::Group { item: i, pos: usize::MAX }),
+            (RowKind::Group(i), Mover::Signal(_) | Mover::Decoder(_) | Mover::Bus(_))
+                if row.depth == 0 =>
+            {
+                Some(Dest::Group {
+                    item: i,
+                    pos: usize::MAX,
+                })
+            }
             _ => None,
         }
     }
 
     /// Move a top-level item up (`delta < 0`) or down; returns its new index.
     pub fn move_item(&mut self, item: usize, delta: i32) -> usize {
-        let to = (item as i64 + delta as i64).clamp(0, self.items.len().saturating_sub(1) as i64) as usize;
+        let to = (item as i64 + delta as i64).clamp(0, self.items.len().saturating_sub(1) as i64)
+            as usize;
         if item < self.items.len() && to != item {
             let it = self.items.remove(item);
             self.items.insert(to, it);
@@ -651,13 +805,21 @@ impl Layout {
 
     pub fn row_label(&self, row: &Row) -> String {
         match row.kind {
-            RowKind::Signal(ch) => self.names.get(ch as usize).cloned().unwrap_or_else(|| format!("CH{ch}")),
+            RowKind::Signal(ch) => self
+                .names
+                .get(ch as usize)
+                .cloned()
+                .unwrap_or_else(|| format!("CH{ch}")),
             RowKind::Bus(i) => match self.bus(i) {
                 Some(b) => format!("{} {}", b.name, bus_range(&b.members)),
                 None => String::new(),
             },
             RowKind::Group(i) => match self.group(i) {
-                Some(g) => format!("{} ({})", g.name, g.members.len() + g.buses.len() + g.decoders.len()),
+                Some(g) => format!(
+                    "{} ({})",
+                    g.name,
+                    g.members.len() + g.buses.len() + g.decoders.len()
+                ),
                 None => String::new(),
             },
             RowKind::Decode { .. } => String::new(),
@@ -677,8 +839,22 @@ impl Layout {
     /// Collect the given top-level signals into a folder at the position of the first of them.
     pub fn add_group(&mut self, name: &str, members: Vec<u8>) -> Result<(), String> {
         let pos = self.take_members(&members)?;
-        let name = if name.trim().is_empty() { "Group".to_string() } else { name.trim().to_string() };
-        self.items.insert(pos.min(self.items.len()), Item::Group(Group { name, members, decoders: Vec::new(), buses: Vec::new(), expanded: true, shown: true }));
+        let name = if name.trim().is_empty() {
+            "Group".to_string()
+        } else {
+            name.trim().to_string()
+        };
+        self.items.insert(
+            pos.min(self.items.len()),
+            Item::Group(Group {
+                name,
+                members,
+                decoders: Vec::new(),
+                buses: Vec::new(),
+                expanded: true,
+                shown: true,
+            }),
+        );
         Ok(())
     }
 
@@ -699,8 +875,13 @@ impl Layout {
                 return Err(format!("channel {ch} is already part of a bus or group"));
             }
         }
-        let pos = self.items.iter().position(|it| matches!(it, Item::Signal(c) if members.contains(c))).unwrap_or(0);
-        self.items.retain(|it| !matches!(it, Item::Signal(c) if members.contains(c)));
+        let pos = self
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::Signal(c) if members.contains(c)))
+            .unwrap_or(0);
+        self.items
+            .retain(|it| !matches!(it, Item::Signal(c) if members.contains(c)));
         Ok(pos)
     }
 
@@ -720,11 +901,31 @@ impl Layout {
                 return Err(format!("channel {ch} is already part of a bus"));
             }
         }
-        let pos = self.items.iter().position(|it| matches!(it, Item::Signal(c) if members.contains(c))).unwrap_or(0);
-        self.items.retain(|it| !matches!(it, Item::Signal(c) if members.contains(c)));
+        let pos = self
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::Signal(c) if members.contains(c)))
+            .unwrap_or(0);
+        self.items
+            .retain(|it| !matches!(it, Item::Signal(c) if members.contains(c)));
         let id = self.next_bus_id();
-        let name = if name.trim().is_empty() { "BUS".to_string() } else { name.trim().to_string() };
-        self.items.insert(pos.min(self.items.len()), Item::Bus(Bus { id, name, members, radix, expanded: false, color: DEFAULT_COLOR, shown: true }));
+        let name = if name.trim().is_empty() {
+            "BUS".to_string()
+        } else {
+            name.trim().to_string()
+        };
+        self.items.insert(
+            pos.min(self.items.len()),
+            Item::Bus(Bus {
+                id,
+                name,
+                members,
+                radix,
+                expanded: false,
+                color: DEFAULT_COLOR,
+                shown: true,
+            }),
+        );
         Ok(())
     }
 
@@ -745,12 +946,18 @@ impl Layout {
             _ => return,
         };
         members.sort_unstable();
-        let out = members.into_iter().map(Item::Signal).chain(decoders.into_iter().map(Item::Decoder));
+        let out = members
+            .into_iter()
+            .map(Item::Signal)
+            .chain(decoders.into_iter().map(Item::Decoder));
         self.items.splice(item..=item, out.collect::<Vec<_>>());
         // Buses of a dissolved group go to the top level, where the group was.
         if !buses.is_empty() {
             let at = item.min(self.items.len());
-            let moved: Vec<Item> = buses.iter().filter_map(|id| self.bus_index(*id).map(|i| self.items.remove(i))).collect();
+            let moved: Vec<Item> = buses
+                .iter()
+                .filter_map(|id| self.bus_index(*id).map(|i| self.items.remove(i)))
+                .collect();
             let at = at.min(self.items.len());
             self.items.splice(at..at, moved);
         }
@@ -770,7 +977,9 @@ pub fn bus_range(members: &[u8]) -> String {
 
 /// Value of the bus in `state` (bit k of the channel word is channel k).
 pub fn bus_value(state: u32, members: &[u8]) -> u64 {
-    members.iter().fold(0u64, |acc, &ch| (acc << 1) | ((state >> ch) & 1) as u64)
+    members
+        .iter()
+        .fold(0u64, |acc, &ch| (acc << 1) | ((state >> ch) & 1) as u64)
 }
 
 pub fn format_bus(value: u64, bits: usize, radix: Radix) -> String {
@@ -784,16 +993,29 @@ pub fn format_bus(value: u64, bits: usize, radix: Radix) -> String {
 /// Parse "15-8", "0,2,4-7" or "8..15" into a channel list; ranges keep the written direction.
 pub fn parse_channels(text: &str, channels: usize) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    for part in text.split([',', ' ']).map(str::trim).filter(|p| !p.is_empty()) {
+    for part in text
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
         let num = |s: &str| -> Result<u8, String> {
-            let v: u8 = s.trim().parse().map_err(|_| format!("'{s}' is not a channel number"))?;
+            let v: u8 = s
+                .trim()
+                .parse()
+                .map_err(|_| format!("'{s}' is not a channel number"))?;
             if (v as usize) < channels {
                 Ok(v)
             } else {
                 Err(format!("channel {v} does not exist"))
             }
         };
-        let sep = if part.contains("..") { Some("..") } else if part.contains('-') { Some("-") } else { None };
+        let sep = if part.contains("..") {
+            Some("..")
+        } else if part.contains('-') {
+            Some("-")
+        } else {
+            None
+        };
         match sep.and_then(|s| part.split_once(s)) {
             Some((a, b)) => {
                 let (a, b) = (num(a)?, num(b)?);
@@ -836,9 +1058,15 @@ mod tests {
 
     #[test]
     fn channel_lists() {
-        assert_eq!(parse_channels("15-8", 16).unwrap(), vec![15, 14, 13, 12, 11, 10, 9, 8]);
+        assert_eq!(
+            parse_channels("15-8", 16).unwrap(),
+            vec![15, 14, 13, 12, 11, 10, 9, 8]
+        );
         assert_eq!(parse_channels("8..11", 16).unwrap(), vec![8, 9, 10, 11]);
-        assert_eq!(parse_channels("0, 2, 4-6", 16).unwrap(), vec![0, 2, 4, 5, 6]);
+        assert_eq!(
+            parse_channels("0, 2, 4-6", 16).unwrap(),
+            vec![0, 2, 4, 5, 6]
+        );
         assert!(parse_channels("16", 16).is_err());
         assert!(parse_channels("a", 16).is_err());
         assert!(parse_channels("", 16).is_err());
@@ -925,7 +1153,11 @@ mod tests {
         let rows = l.rows();
         assert_eq!(l.item_of_row(&rows[0]), Some(0));
         assert_eq!(l.item_of_row(&rows[1]), Some(1));
-        assert_eq!(l.item_of_row(&rows[2]), None, "indented members have no item of their own");
+        assert_eq!(
+            l.item_of_row(&rows[2]),
+            None,
+            "indented members have no item of their own"
+        );
         assert_eq!(l.move_item(1, -1), 0);
         assert!(matches!(l.rows()[0].kind, RowKind::Group(0)));
         assert_eq!(l.move_item(0, -1), 0, "stays at the top");
@@ -961,7 +1193,11 @@ mod tests {
                     RowKind::Group(_) => "grp".into(),
                     RowKind::Decode { id, lane } => format!("d{id}.{lane}"),
                 };
-                if r.depth > 0 { format!(" {t}") } else { t }
+                if r.depth > 0 {
+                    format!(" {t}")
+                } else {
+                    t
+                }
             })
             .collect()
     }
@@ -972,10 +1208,22 @@ mod tests {
         let mut l = Layout::new(4);
         l.add_group("G", vec![1, 2]).unwrap();
         l.add_decoder(7);
-        assert_eq!(names(&l, &two), ["0", "grp", " 1", " 2", "3", "d7.0", "d7.1"]);
+        assert_eq!(
+            names(&l, &two),
+            ["0", "grp", " 1", " 2", "3", "d7.0", "d7.1"]
+        );
         // Into the group: shown after its signals, indented, and hidden when it is collapsed.
-        assert!(l.move_to(Mover::Decoder(7), Dest::Group { item: 1, pos: usize::MAX }));
-        assert_eq!(names(&l, &two), ["0", "grp", " 1", " 2", " d7.0", " d7.1", "3"]);
+        assert!(l.move_to(
+            Mover::Decoder(7),
+            Dest::Group {
+                item: 1,
+                pos: usize::MAX
+            }
+        ));
+        assert_eq!(
+            names(&l, &two),
+            ["0", "grp", " 1", " 2", " d7.0", " d7.1", "3"]
+        );
         assert_eq!(l.group_of(Mover::Decoder(7)), Some(1));
         l.toggle_expanded(1);
         assert_eq!(names(&l, &two), ["0", "grp", "3"]);
@@ -1027,14 +1275,31 @@ mod tests {
         let rows = l.rows_with(&two);
         let sig = Mover::Signal(0);
         assert_eq!(l.drop_gap(&rows, sig, 0), Some(Dest::Top(0)));
-        assert_eq!(l.drop_gap(&rows, sig, 2), Some(Dest::Group { item: 1, pos: 0 }), "between header and first member");
-        assert_eq!(l.drop_gap(&rows, sig, 3), Some(Dest::Group { item: 1, pos: 1 }));
-        assert_eq!(l.drop_gap(&rows, sig, 4), Some(Dest::Top(2)), "below the last member leaves the group");
+        assert_eq!(
+            l.drop_gap(&rows, sig, 2),
+            Some(Dest::Group { item: 1, pos: 0 }),
+            "between header and first member"
+        );
+        assert_eq!(
+            l.drop_gap(&rows, sig, 3),
+            Some(Dest::Group { item: 1, pos: 1 })
+        );
+        assert_eq!(
+            l.drop_gap(&rows, sig, 4),
+            Some(Dest::Top(2)),
+            "below the last member leaves the group"
+        );
         assert_eq!(l.drop_gap(&rows, sig, 7), Some(Dest::Top(4)));
         // Between the lanes of one decoder means after it.
         assert_eq!(l.drop_gap(&rows, sig, 6), Some(Dest::Top(4)));
         // The middle of a group header drops into the group.
-        assert_eq!(l.drop_onto(&rows[1], sig), Some(Dest::Group { item: 1, pos: usize::MAX }));
+        assert_eq!(
+            l.drop_onto(&rows[1], sig),
+            Some(Dest::Group {
+                item: 1,
+                pos: usize::MAX
+            })
+        );
         assert_eq!(l.drop_onto(&rows[0], sig), None);
         assert_eq!(l.drop_onto(&rows[1], Mover::Group(1)), None);
         // A group cannot go into a group.
@@ -1078,14 +1343,27 @@ mod tests {
         l.add_bus("B", vec![3, 2], Radix::Hex).unwrap(); // 0 1 B 4 5   (bus is item 2)
         l.add_group("G", vec![0]).unwrap(); // G[0] 1 B 4 5
         assert_eq!(names(&l, &none), ["grp", " 0", "1", "bus", "4", "5"]);
-        let bus = l.items.iter().position(|it| matches!(it, Item::Bus(_))).unwrap();
-        assert!(l.move_to(Mover::Bus(bus), Dest::Group { item: 0, pos: usize::MAX }));
+        let bus = l
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::Bus(_)))
+            .unwrap();
+        assert!(l.move_to(
+            Mover::Bus(bus),
+            Dest::Group {
+                item: 0,
+                pos: usize::MAX
+            }
+        ));
         assert_eq!(names(&l, &none), ["grp", " 0", " bus", "1", "4", "5"]);
         assert_eq!(l.group_of(Mover::Bus(bus)), Some(0));
         // Expanded, its members sit one level deeper and cannot be picked up.
         l.toggle_expanded(bus);
         let rows = l.rows();
-        assert_eq!(rows.iter().map(|r| r.depth).collect::<Vec<_>>(), [0, 1, 1, 2, 2, 0, 0, 0]);
+        assert_eq!(
+            rows.iter().map(|r| r.depth).collect::<Vec<_>>(),
+            [0, 1, 1, 2, 2, 0, 0, 0]
+        );
         assert_eq!(l.mover_of(&rows[3]), None);
         assert_eq!(l.mover_of(&rows[2]), Some(Mover::Bus(bus)));
         // Hiding the group hides the bus with it; the bus reappears with the group.
@@ -1100,7 +1378,10 @@ mod tests {
         assert_eq!(l.row_label(&l.rows()[0]), "G (2)");
         let end = l.items.len();
         assert!(l.move_to(Mover::Bus(bus), Dest::Top(end)));
-        assert_eq!(names(&l, &none), ["grp", " 0", "1", "4", "5", "bus", " 3", " 2"]);
+        assert_eq!(
+            names(&l, &none),
+            ["grp", " 0", "1", "4", "5", "bus", " 3", " 2"]
+        );
     }
 
     #[test]
@@ -1112,7 +1393,11 @@ mod tests {
         if let Item::Bus(b) = &mut l.items[0] {
             b.shown = false;
         }
-        assert_eq!(names(&l, &none), ["2", "3"], "a hidden bus takes its members with it");
+        assert_eq!(
+            names(&l, &none),
+            ["2", "3"],
+            "a hidden bus takes its members with it"
+        );
         if let Item::Bus(b) = &mut l.items[0] {
             b.shown = true;
         }
@@ -1122,11 +1407,23 @@ mod tests {
         l.visible[0] = true;
         // Dissolving a group with a bus in it keeps the bus.
         l.add_group("G", vec![2]).unwrap();
-        let g = l.items.iter().position(|it| matches!(it, Item::Group(_))).unwrap();
+        let g = l
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::Group(_)))
+            .unwrap();
         assert!(l.move_to(Mover::Bus(0), Dest::Group { item: g, pos: 0 }));
-        let g = l.items.iter().position(|it| matches!(it, Item::Group(_))).unwrap();
+        let g = l
+            .items
+            .iter()
+            .position(|it| matches!(it, Item::Group(_)))
+            .unwrap();
         l.remove_bus(g);
-        assert_eq!(names(&l, &none), ["2", "bus", " 1", " 0", "3"], "signals first, then buses, where the group was");
+        assert_eq!(
+            names(&l, &none),
+            ["2", "bus", " 1", " 0", "3"],
+            "signals first, then buses, where the group was"
+        );
     }
 
     #[test]

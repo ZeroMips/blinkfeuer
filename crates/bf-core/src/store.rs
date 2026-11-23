@@ -102,7 +102,10 @@ impl Chunk {
 
     fn block_events(&self, b: usize) -> &[Event] {
         let lo = self.blocks[b].ev_idx as usize;
-        let hi = self.blocks.get(b + 1).map_or(self.events.len(), |n| n.ev_idx as usize);
+        let hi = self
+            .blocks
+            .get(b + 1)
+            .map_or(self.events.len(), |n| n.ev_idx as usize);
         &self.events[lo..hi]
     }
 
@@ -157,8 +160,14 @@ pub struct CaptureStore {
 
 impl CaptureStore {
     pub fn new(cfg: StoreConfig) -> Self {
-        assert!(cfg.block_samples.is_power_of_two(), "block_samples must be a power of two");
-        assert!(cfg.chunk_samples % cfg.block_samples == 0, "chunk_samples must be a multiple of the block size");
+        assert!(
+            cfg.block_samples.is_power_of_two(),
+            "block_samples must be a power of two"
+        );
+        assert!(
+            cfg.chunk_samples % cfg.block_samples == 0,
+            "chunk_samples must be a multiple of the block size"
+        );
         Self {
             cfg,
             sealed: VecDeque::new(),
@@ -207,7 +216,8 @@ impl CaptureStore {
 
     /// First sample still stored (older ones were evicted).
     pub fn first_sample(&self) -> u64 {
-        self.floor.max(self.sealed.front().map_or(self.open.start, |c| c.start))
+        self.floor
+            .max(self.sealed.front().map_or(self.open.start, |c| c.start))
     }
 
     /// Sample at which the trigger fired, if this capture was triggered.
@@ -282,7 +292,10 @@ impl CaptureStore {
             let c = &mut self.open;
             let off = c.len;
             if off % block == 0 {
-                c.blocks.push(Block { ev_idx: c.events.len() as u32, start_state: c.last_state });
+                c.blocks.push(Block {
+                    ev_idx: c.events.len() as u32,
+                    start_state: c.last_state,
+                });
                 c.counts.resize(c.counts.len() + nch, 0);
             }
             let room = (block - off % block) as usize;
@@ -291,7 +304,10 @@ impl CaptureStore {
             let mut last = c.last_state;
             for (i, &w) in s[..n].iter().enumerate() {
                 if w != last {
-                    c.events.push(Event { off: off + i as u32, state: w });
+                    c.events.push(Event {
+                        off: off + i as u32,
+                        state: w,
+                    });
                     let mut x = w ^ last;
                     while x != 0 {
                         let ch = x.trailing_zeros() as usize;
@@ -305,7 +321,9 @@ impl CaptureStore {
             c.last_state = last;
             c.len += n as u32;
             s = &s[n..];
-            if c.len % block == 0 && (c.len >= chunk_samples || c.events.len() as u32 >= chunk_max_events) {
+            if c.len % block == 0
+                && (c.len >= chunk_samples || c.events.len() as u32 >= chunk_max_events)
+            {
                 self.seal();
             }
         }
@@ -341,7 +359,10 @@ impl CaptureStore {
     }
 
     fn chunks(&self) -> impl Iterator<Item = &Chunk> {
-        self.sealed.iter().chain(std::iter::once(&self.open)).filter(|c| c.len > 0)
+        self.sealed
+            .iter()
+            .chain(std::iter::once(&self.open))
+            .filter(|c| c.len > 0)
     }
 
     /// State word of sample `s`, `None` if it is not (or no longer) stored.
@@ -366,7 +387,9 @@ impl CaptureStore {
                 continue;
             }
             let (a, b) = ((lo - c.start) as u32, (hi - c.start) as u32);
-            Self::walk(c, ch, a, b, block, &mut |off, lvl| f(c.start + off as u64, lvl));
+            Self::walk(c, ch, a, b, block, &mut |off, lvl| {
+                f(c.start + off as u64, lvl)
+            });
         }
     }
 
@@ -378,7 +401,10 @@ impl CaptureStore {
         let mut cur = c.state_before(a, block);
         let bi = (a / block) as usize;
         let lo = c.blocks[bi].ev_idx as usize;
-        let hi = c.blocks.get(bi + 1).map_or(c.events.len(), |n| n.ev_idx as usize);
+        let hi = c
+            .blocks
+            .get(bi + 1)
+            .map_or(c.events.len(), |n| n.ev_idx as usize);
         // First event at or after `a` (binary search inside the block, no scan from its start).
         let start = lo + c.events[lo..hi].partition_point(|e| e.off < a);
         for e in &c.events[start..] {
@@ -408,7 +434,12 @@ impl CaptureStore {
             let (a, b) = ((lo - c.start) as u32, (hi - c.start) as u32);
             let mut cur = c.state_before(a, block);
             let bi = (a / block) as usize;
-            let (blo, bhi) = (c.blocks[bi].ev_idx as usize, c.blocks.get(bi + 1).map_or(c.events.len(), |n| n.ev_idx as usize));
+            let (blo, bhi) = (
+                c.blocks[bi].ev_idx as usize,
+                c.blocks
+                    .get(bi + 1)
+                    .map_or(c.events.len(), |n| n.ev_idx as usize),
+            );
             let start = blo + c.events[blo..bhi].partition_point(|e| e.off < a);
             for e in &c.events[start..] {
                 if e.off >= b {
@@ -476,7 +507,11 @@ impl CaptureStore {
                 continue;
             }
             let (c0, c1) = (c0 as u64, c1 as u64);
-            let before = if c0 > first as u64 { self.level(ch, c0 - 1) } else { self.level(ch, c0) };
+            let before = if c0 > first as u64 {
+                self.level(ch, c0 - 1)
+            } else {
+                self.level(ch, c0)
+            };
             let after = self.level(ch, c1 - 1);
             out.push(Column {
                 valid: true,
@@ -515,7 +550,9 @@ mod tests {
     /// Samples made of runs, so that both sparse and dense stretches occur.
     fn samples() -> impl Strategy<Value = Vec<u32>> {
         prop::collection::vec((0u32..256, 1usize..40), 1..60).prop_map(|runs| {
-            runs.into_iter().flat_map(|(v, n)| std::iter::repeat(v).take(n)).collect()
+            runs.into_iter()
+                .flat_map(|(v, n)| std::iter::repeat(v).take(n))
+                .collect()
         })
     }
 
@@ -613,7 +650,10 @@ mod tests {
         for p in [first, first + 1, (first + s.end()) / 2, s.end() - 1] {
             assert_eq!(s.state_at(p), Some(v[p as usize]), "p={p}");
         }
-        assert_eq!(s.state_at(first.saturating_sub(1)), if first == 0 { Some(v[0]) } else { None });
+        assert_eq!(
+            s.state_at(first.saturating_sub(1)),
+            if first == 0 { Some(v[0]) } else { None }
+        );
     }
 
     proptest! {
@@ -691,11 +731,17 @@ mod tests {
         assert_eq!(s.range(), 333..1000);
         assert_eq!(s.state_at(332), None);
         assert_eq!(s.state_at(333), Some(words[333]));
-        assert!(s.memory_bytes() < before, "chunks before the floor are freed");
+        assert!(
+            s.memory_bytes() < before,
+            "chunks before the floor are freed"
+        );
         // Queries over the visible range agree with the data, the first sample is not an event.
         let mut got = Vec::new();
         s.changes(15, s.range(), |p, st| got.push((p, st)));
-        let want: Vec<(u64, u32)> = (334..1000u64).filter(|&p| words[p as usize] != words[p as usize - 1]).map(|p| (p, words[p as usize])).collect();
+        let want: Vec<(u64, u32)> = (334..1000u64)
+            .filter(|&p| words[p as usize] != words[p as usize - 1])
+            .map(|p| (p, words[p as usize]))
+            .collect();
         assert!(got.iter().all(|e| want.contains(e)), "{got:?}");
         // The floor never moves back, and never past the end.
         s.set_floor(10);

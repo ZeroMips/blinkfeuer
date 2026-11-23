@@ -13,7 +13,13 @@ pub struct VcdSignal {
 /// The coarsest `1/10/100 x s..ps` timescale in which the sample period is a whole number of
 /// ticks (else picoseconds). Returns the VCD text and the tick length in seconds.
 fn timescale(period: f64) -> (String, f64) {
-    const UNITS: [(&str, f64); 5] = [("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9), ("ps", 1e-12)];
+    const UNITS: [(&str, f64); 5] = [
+        ("s", 1.0),
+        ("ms", 1e-3),
+        ("us", 1e-6),
+        ("ns", 1e-9),
+        ("ps", 1e-12),
+    ];
     for (unit, scale) in UNITS {
         for mult in [100.0, 10.0, 1.0] {
             let tick = scale * mult;
@@ -39,7 +45,16 @@ fn ident(mut n: usize) -> String {
 }
 
 fn clean(name: &str) -> String {
-    let s: String = name.chars().map(|c| if c.is_whitespace() || c.is_control() { '_' } else { c }).collect();
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
     if s.is_empty() {
         "_".into()
     } else {
@@ -48,7 +63,12 @@ fn clean(name: &str) -> String {
 }
 
 /// Write `signals` of `store` between the samples of `range` (clipped to the stored range).
-pub fn write_vcd<W: Write>(w: &mut W, store: &CaptureStore, range: Range<u64>, signals: &[VcdSignal]) -> io::Result<()> {
+pub fn write_vcd<W: Write>(
+    w: &mut W,
+    store: &CaptureStore,
+    range: Range<u64>,
+    signals: &[VcdSignal],
+) -> io::Result<()> {
     let r = range.start.max(store.first_sample())..range.end.min(store.end());
     let period = 1.0 / store.sample_rate();
     let (ts, tick) = timescale(period);
@@ -106,7 +126,10 @@ mod tests {
     }
 
     fn sig(c: u8, n: &str) -> VcdSignal {
-        VcdSignal { channel: c, name: n.into() }
+        VcdSignal {
+            channel: c,
+            name: n.into(),
+        }
     }
 
     #[test]
@@ -118,9 +141,30 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("$timescale 10 ns $end"), "{text}");
         assert!(text.contains("$var wire 1 ! A $end") && text.contains("$var wire 1 \" B_C $end"));
-        let body: Vec<&str> = text.split("$enddefinitions $end\n").nth(1).unwrap().lines().collect();
+        let body: Vec<&str> = text
+            .split("$enddefinitions $end\n")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .collect();
         // Channel 2 changes at sample 5 but is not exported: no entry for it.
-        assert_eq!(body, ["#0", "$dumpvars", "0!", "0\"", "$end", "#5", "1!", "#15", "1\"", "#20", "0!", "#30"]);
+        assert_eq!(
+            body,
+            [
+                "#0",
+                "$dumpvars",
+                "0!",
+                "0\"",
+                "$end",
+                "#5",
+                "1!",
+                "#15",
+                "1\"",
+                "#20",
+                "0!",
+                "#30"
+            ]
+        );
     }
 
     #[test]
@@ -130,14 +174,22 @@ mod tests {
         write_vcd(&mut out, &s, 2..5, &[sig(0, "D")]).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("$timescale 1 us $end"));
-        let body: Vec<&str> = text.split("$enddefinitions $end\n").nth(1).unwrap().lines().collect();
+        let body: Vec<&str> = text
+            .split("$enddefinitions $end\n")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .collect();
         assert_eq!(body, ["#2", "$dumpvars", "1!", "$end", "#3", "0!", "#5"]);
     }
 
     #[test]
     fn timescale_picks_exact_units() {
         assert_eq!(timescale(1e-9).0, "1 ns");
-        assert_eq!(timescale(2.5e-9).0, "100 ps".replace("100 ps", &timescale(2.5e-9).0));
+        assert_eq!(
+            timescale(2.5e-9).0,
+            "100 ps".replace("100 ps", &timescale(2.5e-9).0)
+        );
         assert_eq!(timescale(5e-8).0, "10 ns");
         assert_eq!(timescale(1e-3).0, "1 ms");
         assert_eq!(timescale(1.0 / 3e6).1, 1e-12, "no exact unit: picoseconds");
