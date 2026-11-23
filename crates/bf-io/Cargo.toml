@@ -4,6 +4,7 @@ description = "Capture files (own format) and exports (VCD) for blinkfeuer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]

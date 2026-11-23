@@ -35,12 +35,12 @@ pub fn apply(ctx: &egui::Context) {
     v.menu_rounding = Rounding::ZERO;
     v.window_shadow = Shadow::NONE;
     v.popup_shadow = Shadow::NONE;
-    v.window_stroke = Stroke::new(1.0, BORDER);
+    v.window_stroke = Stroke::new(1.0_f32, BORDER);
     v.extreme_bg_color = CHROME_DARK;
     v.faint_bg_color = CHROME_DARK;
     v.override_text_color = Some(TEXT);
     v.selection.bg_fill = SELECT;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
     let w = &mut v.widgets;
     for (ws, fill) in [
         (&mut w.noninteractive, CHROME),
@@ -52,10 +52,10 @@ pub fn apply(ctx: &egui::Context) {
         ws.rounding = Rounding::ZERO;
         ws.bg_fill = fill;
         ws.weak_bg_fill = fill;
-        ws.bg_stroke = Stroke::new(1.0, BORDER);
+        ws.bg_stroke = Stroke::new(1.0_f32, BORDER);
         ws.expansion = 0.0;
     }
-    w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x32, 0x36, 0x3a));
+    w.noninteractive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(0x32, 0x36, 0x3a));
     ctx.set_visuals(v);
 
     ctx.style_mut(|s| {

@@ -177,11 +177,11 @@ fn color_menu(ui: &mut egui::Ui, c: &mut [u8; 3]) -> bool {
                 let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
                 ui.painter().rect_filled(r, 0.0, rgb(*p));
                 let stroke = if *c == *p {
-                    Stroke::new(2.0, Color32::WHITE)
+                    Stroke::new(2.0_f32, Color32::WHITE)
                 } else if resp.hovered() {
-                    Stroke::new(1.0, theme::TEXT)
+                    Stroke::new(1.0_f32, theme::TEXT)
                 } else {
-                    Stroke::new(1.0, theme::BORDER)
+                    Stroke::new(1.0_f32, theme::BORDER)
                 };
                 ui.painter().rect_stroke(r, 0.0, stroke);
                 if resp.on_hover_text(format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2])).clicked() {
@@ -859,7 +859,7 @@ impl App {
             );
         }
         painter.rect_filled(strip, 0.0, Color32::BLACK);
-        painter.rect_stroke(strip, 0.0, Stroke::new(1.0, theme::BORDER));
+        painter.rect_stroke(strip, 0.0, Stroke::new(1.0_f32, theme::BORDER));
         let len = (range.end.saturating_sub(range.start)).max(1) as f64;
         let x_of = |s: f64| strip.left() + ((s - range.start as f64) / len) as f32 * strip.width();
         if !store.is_empty() {
@@ -869,11 +869,11 @@ impl App {
             let w1 = x_of(self.view.end(self.plot_width)).clamp(strip.left(), strip.right()).max(w0 + 2.0);
             let win = Rect::from_min_max(pos2(w0, strip.top() + 1.0), pos2(w1, strip.bottom() - 1.0));
             painter.rect_filled(win, 0.0, Color32::from_white_alpha(0x28));
-            painter.rect_stroke(win, 0.0, Stroke::new(1.0, theme::TRACE));
+            painter.rect_stroke(win, 0.0, Stroke::new(1.0_f32, theme::TRACE));
             for (p, c) in [(store.trigger().map(|t| t as f64), theme::DEC_WARN), (self.markers.m1, theme::M1), (self.markers.m2, theme::M2)] {
                 if let Some(p) = p {
                     let x = x_of(p).clamp(strip.left(), strip.right());
-                    painter.line_segment([pos2(x, strip.top()), pos2(x, strip.bottom())], Stroke::new(2.0, c));
+                    painter.line_segment([pos2(x, strip.top()), pos2(x, strip.bottom())], Stroke::new(2.0_f32, c));
                 }
             }
         }
@@ -1244,8 +1244,8 @@ impl App {
                 color,
             );
         }
-        painter.line_segment([pos2(rect.left(), ruler.bottom()), pos2(ruler.left(), ruler.bottom())], Stroke::new(1.0, theme::BORDER));
-        painter.line_segment([pos2(plot.left(), rect.top()), pos2(plot.left(), rect.bottom())], Stroke::new(1.0, theme::BORDER));
+        painter.line_segment([pos2(rect.left(), ruler.bottom()), pos2(ruler.left(), ruler.bottom())], Stroke::new(1.0_f32, theme::BORDER));
+        painter.line_segment([pos2(plot.left(), rect.top()), pos2(plot.left(), rect.bottom())], Stroke::new(1.0_f32, theme::BORDER));
 
         let gutter_p = painter.with_clip_rect(gutter);
         let mut toggle: Option<usize> = None;
@@ -1272,10 +1272,10 @@ impl App {
             if let RowKind::Bus(item) | RowKind::Group(item) = row.kind {
                 let expanded = self.layout.is_expanded(item);
                 let box_r = Rect::from_center_size(pos2(label.left() + 12.0, r.center().y), vec2(9.0, 9.0));
-                gutter_p.rect_stroke(box_r, 0.0, Stroke::new(1.0, theme::TEXT_DIM));
-                gutter_p.line_segment([box_r.left_center() + vec2(2.0, 0.0), box_r.right_center() - vec2(2.0, 0.0)], Stroke::new(1.0, theme::TEXT));
+                gutter_p.rect_stroke(box_r, 0.0, Stroke::new(1.0_f32, theme::TEXT_DIM));
+                gutter_p.line_segment([box_r.left_center() + vec2(2.0, 0.0), box_r.right_center() - vec2(2.0, 0.0)], Stroke::new(1.0_f32, theme::TEXT));
                 if !expanded {
-                    gutter_p.line_segment([box_r.center_top() + vec2(0.0, 2.0), box_r.center_bottom() - vec2(0.0, 2.0)], Stroke::new(1.0, theme::TEXT));
+                    gutter_p.line_segment([box_r.center_top() + vec2(0.0, 2.0), box_r.center_bottom() - vec2(0.0, 2.0)], Stroke::new(1.0_f32, theme::TEXT));
                 }
             }
             gutter_p.text(
@@ -1324,7 +1324,7 @@ impl App {
                     }
                 }
             }
-            plot_p.line_segment([pos2(rect.left(), r.bottom()), pos2(r.right(), r.bottom())], Stroke::new(1.0, theme::ROW_SEP));
+            plot_p.line_segment([pos2(rect.left(), r.bottom()), pos2(r.right(), r.bottom())], Stroke::new(1.0_f32, theme::ROW_SEP));
 
             let hit = label.intersect(gutter);
             if hit.height() > 2.0 {
@@ -1414,7 +1414,7 @@ impl App {
                 if let Some((edge, idx)) = self.snap_target(&store, s, p.y, plot, &rows, row_h) {
                     self.hover_edge = Some(edge);
                     let c = pos2(plot.left() + self.view.x_of(edge as f64) as f32, plot.top() - self.scroll_y + (idx as f32 + 0.5) * row_h);
-                    plot_p.circle_stroke(c, 5.0, Stroke::new(1.5, theme::SNAP));
+                    plot_p.circle_stroke(c, 5.0, Stroke::new(1.5_f32, theme::SNAP));
                     let mut text = format_split((edge as f64 - origin) / rate, 1.0 / rate);
                     if let Some(m1) = self.markers.m1 {
                         let d = (edge as f64 - m1) / rate;
@@ -1426,7 +1426,7 @@ impl App {
                     let y = if c.y - size.y - 4.0 < plot.top() { c.y + 6.0 } else { c.y - size.y - 4.0 };
                     let tag = Rect::from_min_size(pos2(x, y), size);
                     plot_p.rect_filled(tag, 0.0, Color32::BLACK);
-                    plot_p.rect_stroke(tag, 0.0, Stroke::new(1.0, theme::SNAP));
+                    plot_p.rect_stroke(tag, 0.0, Stroke::new(1.0_f32, theme::SNAP));
                     plot_p.galley(tag.min + vec2(4.0, 2.0), galley, theme::SNAP);
                 }
             }
@@ -1596,11 +1596,11 @@ impl App {
             match mark {
                 Ok(gap) => {
                     let y = top(gap).clamp(plot.top(), plot.bottom());
-                    clip.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(2.0, theme::SNAP));
+                    clip.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(2.0_f32, theme::SNAP));
                 }
                 Err(row) => {
                     let r = Rect::from_min_size(pos2(rect.left(), top(row)), vec2(rect.width(), row_h));
-                    clip.rect_stroke(r.shrink(1.0), 0.0, Stroke::new(2.0, theme::SNAP));
+                    clip.rect_stroke(r.shrink(1.0), 0.0, Stroke::new(2.0_f32, theme::SNAP));
                 }
             }
         } else {
@@ -1609,7 +1609,7 @@ impl App {
         let tag = clip.layout_no_wrap(label, FontId::monospace(12.0), theme::TEXT);
         let tag_r = Rect::from_min_size(p + vec2(12.0, -tag.size().y / 2.0), tag.size()).expand2(vec2(5.0, 2.0));
         clip.rect_filled(tag_r, 0.0, theme::SELECT);
-        clip.rect_stroke(tag_r, 0.0, Stroke::new(1.0, theme::SNAP));
+        clip.rect_stroke(tag_r, 0.0, Stroke::new(1.0_f32, theme::SNAP));
         clip.galley(tag_r.min + vec2(5.0, 2.0), tag, theme::TEXT);
         // Scroll while carrying a row to the edge of the list.
         if p.y < plot.top() + 14.0 {

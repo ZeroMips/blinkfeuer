@@ -733,7 +733,7 @@ pub fn table_ui(
         ui.painter().text(head.left_center() + vec2(x + 4.0, 0.0), egui::Align2::LEFT_CENTER, t, egui::FontId::monospace(11.0), theme::TEXT_DIM);
     }
 
-    ui.painter().line_segment([head.left_bottom(), head.right_bottom()], egui::Stroke::new(1.0, theme::BORDER));
+    ui.painter().line_segment([head.left_bottom(), head.right_bottom()], egui::Stroke::new(1.0_f32, theme::BORDER));
     ui.add_space(2.0);
 
     // ---- rows

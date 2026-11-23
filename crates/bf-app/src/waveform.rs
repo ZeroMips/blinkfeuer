@@ -42,7 +42,7 @@ pub fn draw_signal(painter: &Painter, store: &CaptureStore, ch: u8, rect: Rect, 
     let (top, bottom) = (rect.top() + pad, rect.bottom() - pad);
     let y = |level: bool| if level { top } else { bottom };
     let x_of = |s: f64| rect.left() + view.x_of(s) as f32;
-    let stroke = Stroke::new(1.0, color);
+    let stroke = Stroke::new(1.0_f32, color);
 
     if store.count_toggles(ch, r0..r1) <= 3 * n as u64 {
         let Some(edges) = store.edges(ch, r0..r1, usize::MAX) else { return };
@@ -111,7 +111,7 @@ pub fn draw_bus(painter: &Painter, store: &CaptureStore, members: &[u8], radix: 
     let (top, bottom) = (rect.top() + pad, rect.bottom() - pad);
     let mid = (top + bottom) / 2.0;
     let x_of = |s: f64| rect.left() + view.x_of(s) as f32;
-    let stroke = Stroke::new(1.0, color);
+    let stroke = Stroke::new(1.0_f32, color);
 
     let raw: u64 = members.iter().map(|&c| store.count_toggles(c, r0..r1)).sum();
     if raw > width as u64 {
@@ -169,10 +169,10 @@ pub fn draw_bus(painter: &Painter, store: &CaptureStore, members: &[u8], radix: 
 pub fn draw_ruler(painter: &Painter, rect: Rect, view: &View, rate: f64, origin: f64) {
     let width = rect.width() as f64;
     let (step, major) = ticks(view, width, rate, origin);
-    painter.line_segment([pos2(rect.left(), rect.bottom()), pos2(rect.right(), rect.bottom())], Stroke::new(1.0, theme::GRID_MINOR));
+    painter.line_segment([pos2(rect.left(), rect.bottom()), pos2(rect.right(), rect.bottom())], Stroke::new(1.0_f32, theme::GRID_MINOR));
     for s in minor_ticks(view, width, rate, origin) {
         let x = rect.left() + view.x_of(s as f64) as f32;
-        painter.line_segment([pos2(x, rect.bottom() - 3.0), pos2(x, rect.bottom())], Stroke::new(1.0, theme::GRID_MINOR));
+        painter.line_segment([pos2(x, rect.bottom() - 3.0), pos2(x, rect.bottom())], Stroke::new(1.0_f32, theme::GRID_MINOR));
     }
     let font = FontId::monospace(11.0);
     for (s, t) in major {
@@ -180,7 +180,7 @@ pub fn draw_ruler(painter: &Painter, rect: Rect, view: &View, rate: f64, origin:
         if x < rect.left() || x > rect.right() {
             continue;
         }
-        painter.line_segment([pos2(x, rect.bottom() - 7.0), pos2(x, rect.bottom())], Stroke::new(1.0, theme::TEXT));
+        painter.line_segment([pos2(x, rect.bottom() - 7.0), pos2(x, rect.bottom())], Stroke::new(1.0_f32, theme::TEXT));
         painter.text(
             pos2(x + 3.0, rect.top() + 2.0),
             Align2::LEFT_TOP,
@@ -197,7 +197,7 @@ pub fn draw_grid(painter: &Painter, rect: Rect, view: &View, rate: f64, origin: 
     for (s, _) in major {
         let x = rect.left() + view.x_of(s as f64) as f32;
         if x >= rect.left() && x <= rect.right() {
-            painter.extend(Shape::dashed_line(&[pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, theme::GRID), 1.0, 3.0));
+            painter.extend(Shape::dashed_line(&[pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0_f32, theme::GRID), 1.0, 3.0));
         }
     }
 }
@@ -210,7 +210,7 @@ pub fn draw_markers(painter: &Painter, plot: Rect, ruler: Rect, view: &View, m: 
         if x < plot.left() - 20.0 || x > plot.right() + 20.0 {
             continue;
         }
-        painter.extend(Shape::dashed_line(&[pos2(x, ruler.bottom()), pos2(x, plot.bottom())], Stroke::new(1.0, color), 4.0, 3.0));
+        painter.extend(Shape::dashed_line(&[pos2(x, ruler.bottom()), pos2(x, plot.bottom())], Stroke::new(1.0_f32, color), 4.0, 3.0));
         let tab = Rect::from_min_size(pos2(x - 11.0, ruler.bottom() - 15.0), egui::vec2(22.0, 13.0));
         painter.rect_filled(tab, 0.0, color);
         painter.text(tab.center(), Align2::CENTER_CENTER, name, FontId::monospace(10.0), Color32::BLACK);
@@ -223,7 +223,7 @@ pub fn draw_trigger(painter: &Painter, plot: Rect, ruler: Rect, view: &View, sam
     if x < plot.left() - 20.0 || x > plot.right() + 20.0 {
         return;
     }
-    painter.line_segment([pos2(x, ruler.bottom()), pos2(x, plot.bottom())], Stroke::new(1.5, theme::DEC_WARN));
+    painter.line_segment([pos2(x, ruler.bottom()), pos2(x, plot.bottom())], Stroke::new(1.5_f32, theme::DEC_WARN));
     let tab = Rect::from_min_size(pos2(x - 7.0, ruler.bottom() - 15.0), egui::vec2(14.0, 13.0));
     painter.rect_filled(tab, 0.0, theme::DEC_WARN);
     painter.text(tab.center(), Align2::CENTER_CENTER, "T", FontId::monospace(10.0), Color32::BLACK);
@@ -291,7 +291,7 @@ pub fn draw_annotations(
         let (x0, x1) = (x_of(ann.start as f64), x_of(ann.end as f64));
         let color = annotation_color(ann, base);
         let is_sel = selected == Some(ann.start);
-        let stroke = Stroke::new(if is_sel { 2.0 } else { 1.0 }, if is_sel { Color32::WHITE } else { color });
+        let stroke = Stroke::new(if is_sel { 2.0 } else { 1.0_f32 }, if is_sel { Color32::WHITE } else { color });
         match ann.kind {
             Kind::Start | Kind::Stop => {
                 let w = (x1 - x0).max(3.0);

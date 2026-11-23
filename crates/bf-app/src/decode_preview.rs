@@ -263,7 +263,7 @@ pub fn draw(ui: &mut egui::Ui, p: &Preview, fmt: Format) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, theme::PLOT_BG);
-    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::BORDER));
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, theme::BORDER));
     let plot = Rect::from_min_max(pos2(rect.left() + GUTTER, rect.top()), pos2(rect.right() - 8.0, rect.bottom()));
     let x_of = |s: f64| plot.left() + (s / p.len as f64) as f32 * plot.width();
     let font = FontId::monospace(10.0);
@@ -271,14 +271,14 @@ pub fn draw(ui: &mut egui::Ui, p: &Preview, fmt: Format) {
     // Bit names across the top, with faint separators.
     for (s0, s1, text) in &p.bit_labels {
         let (x0, x1) = (x_of(*s0), x_of(*s1));
-        painter.line_segment([pos2(x0, rect.top() + TOP - 4.0), pos2(x0, rect.bottom() - 4.0)], Stroke::new(1.0, theme::GRID));
+        painter.line_segment([pos2(x0, rect.top() + TOP - 4.0), pos2(x0, rect.bottom() - 4.0)], Stroke::new(1.0_f32, theme::GRID));
         if x1 - x0 > 9.0 * text.len() as f32 * 0.7 {
             painter.text(pos2((x0 + x1) / 2.0, rect.top() + 9.0), Align2::CENTER_CENTER, text, font.clone(), theme::TEXT_DIM);
         }
     }
     if let Some((_, s1, _)) = p.bit_labels.last() {
         let x = x_of(*s1);
-        painter.line_segment([pos2(x, rect.top() + TOP - 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(1.0, theme::GRID));
+        painter.line_segment([pos2(x, rect.top() + TOP - 4.0), pos2(x, rect.bottom() - 4.0)], Stroke::new(1.0_f32, theme::GRID));
     }
 
     let row_top = |i: usize| rect.top() + TOP + i as f32 * ROW;
@@ -296,7 +296,7 @@ pub fn draw(ui: &mut egui::Ui, p: &Preview, fmt: Format) {
             }
         }
         pts.push(pos2(x_of(p.len as f64), y_of(i, prev)));
-        painter.add(Shape::line(pts, Stroke::new(1.5, theme::TRACE)));
+        painter.add(Shape::line(pts, Stroke::new(1.5_f32, theme::TRACE)));
     }
     for &(row, s) in &p.marks {
         let level = p.rows[row].levels.get(s as usize).copied().unwrap_or(false);
