@@ -1698,11 +1698,10 @@ impl App {
             let (scroll, zoom_delta, shift) =
                 ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.shift));
             let hover_x = pointer.map_or(0.0, |p| (p.x - plot.left()) as f64);
-            let anchor = if self.follow {
-                self.plot_width
-            } else {
-                hover_x
-            };
+            // Zoom around the pointer, except while following live data: then the newest sample
+            // stays at the right edge.
+            let live = self.follow && self.running();
+            let anchor = if live { self.plot_width } else { hover_x };
             let mut factor = zoom_delta as f64;
             if shift || scroll.x.abs() > scroll.y.abs() {
                 let dx = if scroll.x.abs() > scroll.y.abs() {
@@ -1719,6 +1718,10 @@ impl App {
             }
             if (factor - 1.0).abs() > 1e-9 {
                 self.view.zoom_at(anchor, factor);
+                if !live {
+                    // Nothing new to follow: keep the view where the zoom put it.
+                    self.follow = false;
+                }
             }
         }
         let shift = ui.input(|i| i.modifiers.shift);
