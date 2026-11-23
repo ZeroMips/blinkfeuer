@@ -41,6 +41,8 @@ A working first version. What is verified and what is not:
 - **Live view** with zoom, pan, follow mode and an overview strip. Scale is given in time per division,
   with times shown in groups ("10 ms 000 µs 400 ns").
 - **Markers** M1 and M2 that snap to edges, with their delta and 1/dt; per-row values at the markers.
+  The cursor keys move M1 (Shift: M2) from edge to edge of the selected row, or from item to item on a
+  decoder row; Up/Down select the row, Home or F shows the whole capture.
 - **Bus/Signal setup**: names, 16 trace colors, buses with hex/decimal/binary values, collapsible groups,
   drag and drop reordering, hiding rows. Decoders can sit inside groups.
 - **Protocol decoders** for UART, SPI and I2C, written to be fast (cost proportional to the number of

@@ -353,6 +353,7 @@ pub struct App {
     view: View,
     follow: bool,
     plot_width: f64,
+    plot_height: f32,
     pending_fit: bool,
     scale_text: String,
 
@@ -439,6 +440,7 @@ impl App {
             view: View::default(),
             follow: true,
             plot_width: 800.0,
+            plot_height: 400.0,
             pending_fit: false,
             scale_text: String::new(),
             markers: Markers::default(),
@@ -694,7 +696,7 @@ impl App {
                     ui.close_menu();
                 }
                 if ui
-                    .add(egui::Button::new("Fit capture").shortcut_text("Home"))
+                    .add(egui::Button::new("Fit capture").shortcut_text("Home / F"))
                     .clicked()
                 {
                     self.fit();
@@ -757,6 +759,138 @@ impl App {
     fn center_on(&mut self, sample: f64) {
         self.view.start = sample - self.plot_width * self.view.spp / 2.0;
         self.follow = false;
+    }
+
+    /// Centre on `sample` only if it is outside the visible window.
+    fn ensure_visible(&mut self, sample: f64) {
+        if sample < self.view.start || sample > self.view.end(self.plot_width) {
+            self.center_on(sample);
+        }
+    }
+
+    fn view_center(&self) -> f64 {
+        self.view.sample_at(self.plot_width / 2.0)
+    }
+
+    fn current_rows(&self) -> Vec<Row> {
+        self.layout.rows_with(&|id| self.decoder_lanes(id))
+    }
+
+    /// Up/Down: select the row above or below (the row the cursor keys work on), scrolling it into view.
+    fn select_row_step(&mut self, dir: i32) {
+        let rows = self.current_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let cur = self
+            .selected
+            .and_then(|k| rows.iter().position(|r| r.kind == k));
+        let idx = match cur {
+            Some(i) => (i as i64 + dir as i64).clamp(0, rows.len() as i64 - 1) as usize,
+            None if dir > 0 => 0,
+            None => rows.len() - 1,
+        };
+        self.selected = Some(rows[idx].kind);
+        let (top, h) = (idx as f32 * self.row_h, self.row_h);
+        if top < self.scroll_y {
+            self.scroll_y = top;
+        } else if top + h > self.scroll_y + self.plot_height {
+            self.scroll_y = top + h - self.plot_height;
+        }
+    }
+
+    /// Left/Right: on a decoder row go to the previous/next decoded item; on a signal, bus or group row
+    /// (or with no row selected: any channel) move the marker to the previous/next edge.
+    fn step(&mut self, dir: i32, which: Which) {
+        let rows = self.current_rows();
+        let row = self
+            .selected
+            .and_then(|k| rows.iter().find(|r| r.kind == k));
+        if let Some(RowKind::Decode { id, lane }) = row.map(|r| r.kind) {
+            self.step_item(id, lane, dir);
+            return;
+        }
+        let mask = match row {
+            Some(r) => self
+                .layout
+                .row_channels(r)
+                .iter()
+                .fold(0u32, |m, &c| m | 1 << c),
+            None => self.store.read().config().channels.mask(),
+        };
+        let from = self
+            .markers
+            .get(which)
+            .unwrap_or_else(|| self.view_center());
+        let found = {
+            let store = self.store.read();
+            if dir > 0 {
+                store.next_change(mask, from.max(0.0).floor() as u64)
+            } else {
+                store.prev_change(mask, from.max(0.0).ceil() as u64)
+            }
+        };
+        match found {
+            Some(p) => {
+                self.markers.set(which, p as f64);
+                self.selected_ann = None;
+                self.ensure_visible(p as f64);
+            }
+            None => self.notify(
+                if dir > 0 {
+                    "no further edge"
+                } else {
+                    "no earlier edge"
+                },
+                false,
+            ),
+        }
+    }
+
+    /// The previous/next item of a decoder lane: after the selected item if it is on this lane, else
+    /// after M1 (or the view centre).
+    fn step_item(&mut self, id: u32, lane: u8, dir: i32) {
+        let Some(anns) = self.entry(id).map(|e| e.handle.anns.clone()) else {
+            return;
+        };
+        let pos = self.markers.m1.unwrap_or_else(|| self.view_center());
+        let sel = self
+            .selected_ann
+            .filter(|s| s.id == id && s.lane == lane)
+            .map(|s| s.start);
+        let target = {
+            let anns = anns.read();
+            let Some(l) = anns.lanes.get(lane as usize) else {
+                return;
+            };
+            let idx = match sel {
+                Some(start) => {
+                    let i = l.partition_point(|a| a.start < start);
+                    if dir > 0 {
+                        Some(i + 1)
+                    } else {
+                        i.checked_sub(1)
+                    }
+                }
+                None if dir > 0 => Some(l.partition_point(|a| a.start as f64 <= pos)),
+                None => l.partition_point(|a| (a.start as f64) < pos).checked_sub(1),
+            };
+            idx.and_then(|i| l.get(i).map(|a| (i, *a)))
+        };
+        match target {
+            Some((i, a)) => {
+                self.select_annotation(id, lane, a, i, false, false);
+                self.ensure_visible((a.start + a.end) as f64 / 2.0);
+            }
+            None => self.notify(
+                if dir > 0 {
+                    "no further item"
+                } else {
+                    "no earlier item"
+                },
+                false,
+            ),
+        }
     }
 
     fn zoom_center(&mut self, factor: f64) {
@@ -1518,6 +1652,7 @@ impl App {
             pos2(rect.left() + GUTTER, rect.bottom()),
         );
         self.plot_width = plot.width() as f64;
+        self.plot_height = plot.height();
 
         let rows = self.layout.rows_with(&|id| self.decoder_lanes(id));
         let row_h = if self.row_auto {
@@ -1600,6 +1735,13 @@ impl App {
             }
             if let Some(p) = resp.interact_pointer_pos() {
                 if resp.clicked() {
+                    // The clicked row becomes the one the cursor keys work on.
+                    if !in_ruler {
+                        let i = ((p.y - plot.top() + self.scroll_y) / row_h).floor();
+                        if let Some(r) = (i >= 0.0).then(|| rows.get(i as usize)).flatten() {
+                            self.selected = Some(r.kind);
+                        }
+                    }
                     // A click on a decoded item selects it (and shows it in the table); elsewhere it places a marker.
                     let picked = !in_ruler && self.click_annotation(p, plot, &rows, row_h);
                     if !picked {
@@ -2368,7 +2510,13 @@ impl App {
                                 "View > Measurements",
                                 "frequency, duty and pulse widths per channel",
                             ),
-                            ("Home", "fit"),
+                            ("Home or F", "fit the whole capture"),
+                            (
+                                "Left / Right",
+                                "M1 to the previous / next edge of the selected row; on a decoder row the previous / next item",
+                            ),
+                            ("Shift+Left / Right", "the same for M2"),
+                            ("Up / Down", "select the row above / below"),
                             ("Ctrl+Up / Down", "taller / shorter rows"),
                             (
                                 "Click a decoded item",
@@ -2663,13 +2811,42 @@ impl eframe::App for App {
             self.save_capture();
         }
 
-        // While a file dialog is open the keyboard belongs to it (its text fields, Escape).
+        // While a file dialog is open the keyboard belongs to it (its text fields, Escape); keys that
+        // also edit text (Home, arrows, letters) are left to a focused text field.
         let keys = !self.file_dialog_open();
+        let nav = keys && !ctx.wants_keyboard_input();
+        let (left, right, up, down, fit_key, shift_nav) = ctx.input(|i| {
+            let plain = !i.modifiers.command && !i.modifiers.alt;
+            (
+                nav && plain && i.key_pressed(Key::ArrowLeft),
+                nav && plain && i.key_pressed(Key::ArrowRight),
+                nav && plain && !i.modifiers.shift && i.key_pressed(Key::ArrowUp),
+                nav && plain && !i.modifiers.shift && i.key_pressed(Key::ArrowDown),
+                nav && plain && !i.modifiers.shift && i.key_pressed(Key::F),
+                i.modifiers.shift,
+            )
+        });
+        let marker = if shift_nav { Which::M2 } else { Which::M1 };
+        if left {
+            self.step(-1, marker);
+        }
+        if right {
+            self.step(1, marker);
+        }
+        if up {
+            self.select_row_step(-1);
+        }
+        if down {
+            self.select_row_step(1);
+        }
+        if fit_key {
+            self.fit();
+        }
         let (f5, f8, home) = ctx.input(|i| {
             (
                 keys && i.key_pressed(Key::F5),
                 keys && i.key_pressed(Key::F8),
-                keys && i.key_pressed(Key::Home),
+                nav && i.key_pressed(Key::Home),
             )
         });
         let (taller, shorter) = ctx.input(|i| {

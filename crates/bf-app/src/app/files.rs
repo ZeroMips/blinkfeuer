@@ -610,10 +610,8 @@ impl App {
         self.error = None;
         self.layout = Layout::new(n as usize);
         self.layout_touched = false;
-        let mut view_saved = false;
         match Setup::from_json(&setup_json) {
             Ok(s) => {
-                view_saved = s.view.is_some();
                 if let Err(e) = self.apply_setup(
                     s,
                     Apply {
@@ -629,9 +627,8 @@ impl App {
                 true,
             ),
         }
-        if !view_saved {
-            self.fit();
-        }
+        // An opened capture is shown whole (the view saved with it is not restored).
+        self.fit();
         self.file = Some(path);
         let r = self.store.read().range();
         self.view.clamp(r, self.plot_width);

@@ -453,6 +453,58 @@ impl CaptureStore {
         }
     }
 
+    /// The first change of any channel in `mask` after sample `s` (a toggle at `p > s`), for jumping
+    /// from edge to edge. Cost is proportional to the stored events skipped, not to the samples.
+    pub fn next_change(&self, mask: u32, s: u64) -> Option<u64> {
+        let from = s.saturating_add(1).max(self.first_sample() + 1);
+        for c in self.chunks() {
+            if c.end() <= from {
+                continue;
+            }
+            let off = from.saturating_sub(c.start) as u32;
+            let i0 = c.events.partition_point(|e| e.off < off);
+            for i in i0..c.events.len() {
+                let prev = if i > 0 {
+                    c.events[i - 1].state
+                } else {
+                    c.prev_state
+                };
+                if (c.events[i].state ^ prev) & mask != 0 {
+                    return Some(c.start + c.events[i].off as u64);
+                }
+            }
+        }
+        None
+    }
+
+    /// The last change of any channel in `mask` before sample `s` (a toggle at `p < s`).
+    pub fn prev_change(&self, mask: u32, s: u64) -> Option<u64> {
+        let first = self.first_sample();
+        let chunks: Vec<&Chunk> = self.chunks().collect();
+        for c in chunks.into_iter().rev() {
+            if c.start >= s {
+                continue;
+            }
+            let off = (s.min(c.end()) - c.start) as u32;
+            let end = c.events.partition_point(|e| e.off < off);
+            for i in (0..end).rev() {
+                let p = c.start + c.events[i].off as u64;
+                if p <= first {
+                    return None;
+                }
+                let prev = if i > 0 {
+                    c.events[i - 1].state
+                } else {
+                    c.prev_state
+                };
+                if (c.events[i].state ^ prev) & mask != 0 {
+                    return Some(p);
+                }
+            }
+        }
+        None
+    }
+
     /// Number of toggles of `ch` in `range`; whole blocks are answered from the summaries.
     pub fn count_toggles(&self, ch: u8, range: Range<u64>) -> u64 {
         let first = self.first_sample();
@@ -582,6 +634,18 @@ mod tests {
                 }
             }
             prop_assert_eq!(got, want);
+        }
+
+        #[test]
+        fn next_and_prev_change_match_a_naive_scan(v in samples(), mask in 1u32..256, at in 0u64..2500,
+                                                   splits in prop::collection::vec(0usize..1000, 0..10)) {
+            let mut s = CaptureStore::new(cfg(8, 32, 8));
+            fill(&mut s, &v, &splits);
+            let toggles: Vec<u64> = (1..v.len() as u64)
+                .filter(|&p| (v[p as usize - 1] ^ v[p as usize]) & mask != 0)
+                .collect();
+            prop_assert_eq!(s.next_change(mask, at), toggles.iter().copied().find(|&p| p > at));
+            prop_assert_eq!(s.prev_change(mask, at), toggles.iter().copied().rev().find(|&p| p < at));
         }
     }
 
