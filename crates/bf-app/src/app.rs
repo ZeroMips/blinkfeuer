@@ -689,7 +689,10 @@ impl App {
                     ui.close_menu();
                 }
                 if ui
-                    .add_enabled(running, egui::Button::new("Stop").shortcut_text("F8"))
+                    .add_enabled(
+                        running,
+                        egui::Button::new("Stop").shortcut_text("F8 / Shift+F5"),
+                    )
                     .clicked()
                 {
                     self.stop();
@@ -2579,7 +2582,7 @@ impl App {
                             ("Click overview", "jump to that part of the capture"),
                             ("Click +/- on a bus", "expand to its signals"),
                             ("Right-click a row", "trace color"),
-                            ("F5 / F8", "run / stop"),
+                            ("F5 / F8 or Shift+F5", "run / stop"),
                             ("Ctrl+O / Ctrl+S", "open / save a capture"),
                             (
                                 "View > Measurements",
@@ -2919,8 +2922,9 @@ impl eframe::App for App {
         }
         let (f5, f8, home) = ctx.input(|i| {
             (
-                keys && i.key_pressed(Key::F5),
-                keys && i.key_pressed(Key::F8),
+                keys && !i.modifiers.shift && i.key_pressed(Key::F5),
+                // Shift+F5 as well: F8 can be taken by a global hotkey of another program.
+                keys && (i.key_pressed(Key::F8) || i.modifiers.shift && i.key_pressed(Key::F5)),
                 nav && i.key_pressed(Key::Home),
             )
         });
