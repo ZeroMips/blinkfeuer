@@ -5,7 +5,7 @@ use crate::view::format_split;
 use bf_decode::engine::DecoderHandle;
 use bf_decode::i2c::{I2c, I2cConfig};
 use bf_decode::spi::{Spi, SpiConfig};
-use bf_decode::uart::{Parity, Uart, UartConfig};
+use bf_decode::uart::{GapUnit, Parity, Protocol, Uart, UartConfig};
 use bf_decode::{Annotation, Decoder, Format, Kind};
 use egui::{vec2, Color32, Rect, RichText, Sense};
 
@@ -95,7 +95,8 @@ mod help {
     pub const UART_STOP: &str = "Length of the idle period that ends a frame: 1, 1.5 or 2 bit times. The decoder checks the first stop bit: a low level there is a framing error (FE).";
     pub const UART_LSB: &str = "UART sends the least significant bit first. Turn this off for the rare links that send the most significant bit first.";
     pub const UART_TELEGRAMS: &str = "Characters that follow each other closely are joined into one telegram: a bar on the 'Telegram' row showing the whole text, and one line in the annotation table (searchable by text).";
-    pub const UART_GAP: &str = "A telegram ends when the line has been idle this long, in bit times. 24 bit times is about 2.4 characters. Use a larger gap for slow senders, or about 38 bit times (3.5 characters) for Modbus RTU.";
+    pub const UART_GAP: &str = "A telegram ends when the line has been idle this long, in bit times or in characters (a character is start, data, parity and stop bits: 10 bit times for 8N1, 11 for 8E1). Changing the unit converts the value. The default of 24 bit times is about 2.4 characters; use a larger gap for slow senders. Click the number to type it, or drag it.";
+    pub const UART_PROTOCOL: &str = "What the characters carry. None: plain characters, optionally joined into telegrams. Modbus RTU: frames are found by the pause between them (3.5 characters, 1.75 ms above 19200 baud) and checked by their CRC; each frame is shown on the 'Frame' row and split into address, function, registers, values and CRC on the 'Fields' row. Modbus RTU usually runs 8E1 (even parity) or 8N2.";
     pub const UART_LF: &str = "Also end a telegram right after a line feed (0x0A), as in line-based text protocols such as NMEA or console output.";
     pub const UART_INVERT: &str = "Use when the line idles low and a start bit is a high level (inverted logic, e.g. RS-232 seen without a level shifter).";
 
@@ -174,6 +175,58 @@ fn optional_channel_combo(
 }
 
 /// One labelled parameter row with hover help on both the label and the control.
+/// The telegram gap: a number (click to type, drag to change) and its unit. Changing the unit converts
+/// the number, so the gap stays the same.
+fn gap_editor(ui: &mut egui::Ui, id: &str, c: &mut UartConfig) -> egui::Response {
+    let mut unit_changed = false;
+    let mut r = ui
+        .horizontal(|ui| {
+            let speed = match c.telegram_gap_unit {
+                GapUnit::Bits => 0.5,
+                GapUnit::Chars => 0.05,
+            };
+            let num = ui.add(
+                egui::DragValue::new(&mut c.telegram_gap)
+                    .speed(speed)
+                    .range(0.1..=10_000.0)
+                    .max_decimals(2),
+            );
+            let before = c.telegram_gap_unit;
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(c.telegram_gap_unit.label())
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    for u in GapUnit::ALL {
+                        ui.selectable_value(&mut c.telegram_gap_unit, u, u.label());
+                    }
+                });
+            if c.telegram_gap_unit != before {
+                c.telegram_gap =
+                    convert_gap(c.telegram_gap, before, c.telegram_gap_unit, c.char_bits());
+                unit_changed = true;
+            }
+            num
+        })
+        .inner;
+    if unit_changed {
+        r.mark_changed();
+    }
+    r
+}
+
+/// `value` in unit `from` expressed in unit `to` (rounded to 2 decimals).
+fn convert_gap(value: f64, from: GapUnit, to: GapUnit, char_bits: f64) -> f64 {
+    let bits = match from {
+        GapUnit::Bits => value,
+        GapUnit::Chars => value * char_bits,
+    };
+    let v = match to {
+        GapUnit::Bits => bits,
+        GapUnit::Chars => bits / char_bits,
+    };
+    (v * 100.0).round() / 100.0
+}
+
 fn param(
     ui: &mut egui::Ui,
     label: &str,
@@ -362,6 +415,30 @@ pub fn config_ui_with(
                 });
             });
             if telegrams {
+                section(ui, "Protocol", |ui| {
+                    grid(ui, &format!("{id}g4"), |ui| {
+                        changed |= param(ui, "Protocol", help::UART_PROTOCOL, |ui| {
+                            let mut ch = false;
+                            let mut r = egui::ComboBox::from_id_salt(format!("{id}proto"))
+                                .selected_text(c.protocol.label())
+                                .width(140.0)
+                                .show_ui(ui, |ui| {
+                                    for p in Protocol::ALL {
+                                        ch |= ui
+                                            .selectable_value(&mut c.protocol, p, p.label())
+                                            .changed();
+                                    }
+                                })
+                                .response;
+                            if ch {
+                                r.mark_changed();
+                            }
+                            r
+                        });
+                    });
+                });
+            }
+            if telegrams && c.protocol == Protocol::Plain {
                 section(ui, "Telegrams", |ui| {
                     grid(ui, &format!("{id}g3"), |ui| {
                         changed |= param(ui, "Join characters", help::UART_TELEGRAMS, |ui| {
@@ -372,12 +449,7 @@ pub fn config_ui_with(
                         });
                         if c.telegrams {
                             changed |= param(ui, "Idle gap", help::UART_GAP, |ui| {
-                                ui.add(
-                                    egui::DragValue::new(&mut c.telegram_gap)
-                                        .speed(0.5)
-                                        .range(1.0..=10_000.0)
-                                        .suffix(" bit times"),
-                                )
+                                gap_editor(ui, &format!("{id}gapunit"), c)
                             });
                             changed |= param(ui, "Line feed", help::UART_LF, |ui| {
                                 ui.checkbox(&mut c.telegram_lf, "End a telegram after LF (\\n)")
@@ -632,6 +704,7 @@ fn info_text(a: &Annotation) -> String {
         (flag::INCOMPLETE, "incomplete word"),
         (flag::NAK, "not acknowledged"),
         (flag::REPEATED, "repeated start"),
+        (flag::CHECKSUM, "CRC error"),
     ] {
         if a.flags & f != 0 {
             v.push(t);
@@ -645,6 +718,20 @@ fn info_text(a: &Annotation) -> String {
         });
     }
     v.join(", ")
+}
+
+/// The info column: a Modbus frame lists its bytes (in hex) before the info words.
+fn info_with_bytes(a: &Annotation, chars: &[Annotation]) -> String {
+    let info = info_text(a);
+    if a.kind != Kind::ModbusFrame {
+        return info;
+    }
+    let bytes = bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), Format::Hex, 300);
+    if info.is_empty() {
+        bytes
+    } else {
+        format!("{bytes}  ({info})")
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -698,7 +785,8 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
         }
     }
     lane.to_ascii_lowercase().contains(q)
-        || (a.flags != 0 || a.kind == Kind::Address) && info_text(a).contains(q)
+        || (a.flags != 0 || a.kind == Kind::Address || a.kind == Kind::ModbusFrame)
+            && info_with_bytes(a, chars).to_ascii_lowercase().contains(q)
 }
 
 /// The row to jump to from the selection (the row whose annotation starts at `sel`) in direction `dir`
@@ -951,7 +1039,12 @@ pub fn table_ui(
                 let text = bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), fmt, 400);
                 (a.value.to_string(), (text, color))
             } else {
-                (a.label(fmt), (info_text(a), theme::DEC_WARN))
+                let info_color = if a.flags == 0 && a.kind != Kind::Address {
+                    theme::TEXT_DIM
+                } else {
+                    theme::DEC_WARN
+                };
+                (a.label(fmt), (info_with_bytes(a, chars), info_color))
             };
             let cells: [(f32, String, Color32); 4] = [
                 (
@@ -1076,7 +1169,7 @@ pub fn write_csv(
             a.end,
             a.kind,
             csv_field(&text),
-            csv_field(&info_text(a))
+            csv_field(&info_with_bytes(a, chars))
         )?;
     }
     Ok(())
@@ -1193,6 +1286,35 @@ mod tests {
     }
 
     #[test]
+    fn modbus_frames_are_found_by_their_bytes_and_crc_errors() {
+        let chars: Vec<Annotation> = [0x65u32, 0x06, 0x01, 0x01]
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| Annotation {
+                start: i as u64 * 10,
+                end: i as u64 * 10 + 10,
+                ..ann(Kind::Data, v, 0)
+            })
+            .collect();
+        let frame = Annotation {
+            start: 0,
+            end: 40,
+            ..ann(Kind::ModbusFrame, 0x6506, bf_decode::flag::CHECKSUM)
+        };
+        assert!(matches(&frame, "Frame", "65 06 01", Format::Hex, &chars));
+        assert!(matches(
+            &frame,
+            "Frame",
+            "write single",
+            Format::Hex,
+            &chars
+        ));
+        assert!(matches(&frame, "Frame", "crc", Format::Hex, &chars));
+        assert!(!matches(&frame, "Frame", "65 03", Format::Hex, &chars));
+        assert_eq!(info_with_bytes(&frame, &chars), "65 06 01 01  (CRC error)");
+    }
+
+    #[test]
     fn empty_query_matches_everything() {
         assert!(matches(&ann(Kind::Stop, 0, 0), "I2C", "", Format::Hex, &[]));
     }
@@ -1251,6 +1373,17 @@ mod tests {
         let mut out = Vec::new();
         write_csv(&mut out, &lanes, 5, 1000.0, Format::Hex).unwrap();
         assert_eq!(String::from_utf8(out).unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn the_gap_unit_converts_and_old_setups_are_in_bit_times() {
+        assert_eq!(convert_gap(24.0, GapUnit::Bits, GapUnit::Chars, 10.0), 2.4);
+        assert_eq!(convert_gap(3.5, GapUnit::Chars, GapUnit::Bits, 11.0), 38.5);
+        assert_eq!(convert_gap(38.5, GapUnit::Bits, GapUnit::Chars, 11.0), 3.5);
+        assert_eq!(convert_gap(7.0, GapUnit::Bits, GapUnit::Bits, 10.0), 7.0);
+        let old: UartConfig = serde_json::from_str(r#"{"telegram_gap": 38.0}"#).unwrap();
+        assert_eq!(old.telegram_gap_unit, GapUnit::Bits);
+        assert_eq!(old.telegram_gap_bits(), 38.0);
     }
 
     #[test]

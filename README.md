@@ -47,6 +47,9 @@ A working first version. What is verified and what is not:
   edges, not samples), with a setup screen that shows example traces for the chosen settings. UART
   characters are also grouped into readable telegrams, and the UART baud rate can be detected from the
   capture (also in the trigger setup).
+- **Modbus RTU** on top of the UART decoder: frames found by the pause between them and checked by their
+  CRC (also when a device answers too fast), each frame split into address, function, registers,
+  values and CRC, with requests and responses told apart where the function allows it.
 - **Annotation table** of decoded items with search; clicking in the table moves the waveform and vice versa.
 - **Triggers** (done on the host, the analyzer has none in hardware): level and edge conditions on any
   channels, or a protocol trigger (UART text or error, SPI word with a bit mask, I2C address, START/STOP,

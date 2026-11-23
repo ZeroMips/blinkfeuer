@@ -3,8 +3,33 @@
 //! A falling edge on an idle line starts a frame; the start bit is verified in its middle and every
 //! following bit is sampled in the middle of its slot. Frames are decoded from edges only, so the cost
 //! is proportional to the number of frames (a handful of level lookups each), not to the samples.
+//!
+//! What happens with the characters beyond lane 0 is up to the configured [`ByteLayer`]: telegrams
+//! for plain serial data, or a protocol parser such as Modbus RTU.
 
+use crate::layer::{ByteLayer, CharTiming, Telegrams};
+use crate::modbus::ModbusRtu;
 use crate::{bit, flag, Annotation, Decoder, Kind};
+
+/// The protocol carried by the characters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Protocol {
+    /// Plain characters, optionally joined into telegrams.
+    #[default]
+    Plain,
+    ModbusRtu,
+}
+
+impl Protocol {
+    pub const ALL: [Protocol; 2] = [Protocol::Plain, Protocol::ModbusRtu];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Protocol::Plain => "None (characters)",
+            Protocol::ModbusRtu => "Modbus RTU",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Parity {
@@ -37,6 +62,27 @@ impl Parity {
     }
 }
 
+/// Unit of the telegram gap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GapUnit {
+    /// Bit times (setups saved before the unit existed are in bit times).
+    #[default]
+    Bits,
+    /// Character times: start, data, parity and stop bits of the configured format.
+    Chars,
+}
+
+impl GapUnit {
+    pub const ALL: [GapUnit; 2] = [GapUnit::Bits, GapUnit::Chars];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GapUnit::Bits => "bit times",
+            GapUnit::Chars => "characters",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct UartConfig {
@@ -52,10 +98,30 @@ pub struct UartConfig {
     pub invert: bool,
     /// Group consecutive characters into telegrams (lane 1).
     pub telegrams: bool,
-    /// A telegram ends when the line has been idle this many bit times.
+    /// A telegram ends when the line has been idle this long (in `telegram_gap_unit`).
     pub telegram_gap: f64,
+    pub telegram_gap_unit: GapUnit,
     /// ... or right after a line feed (0x0A).
     pub telegram_lf: bool,
+    /// The protocol on top of the characters (telegram settings apply to `Plain` only).
+    pub protocol: Protocol,
+}
+
+impl UartConfig {
+    /// Bits per character on the wire: start, data, parity and stop bits.
+    pub fn char_bits(&self) -> f64 {
+        1.0 + self.data_bits as f64
+            + (self.parity != Parity::None) as u8 as f64
+            + self.stop_bits as f64
+    }
+
+    /// The telegram gap in bit times, whatever unit it is set in.
+    pub fn telegram_gap_bits(&self) -> f64 {
+        match self.telegram_gap_unit {
+            GapUnit::Bits => self.telegram_gap,
+            GapUnit::Chars => self.telegram_gap * self.char_bits(),
+        }
+    }
 }
 
 impl Default for UartConfig {
@@ -70,7 +136,9 @@ impl Default for UartConfig {
             invert: false,
             telegrams: true,
             telegram_gap: 24.0,
+            telegram_gap_unit: GapUnit::Bits,
             telegram_lf: true,
+            protocol: Protocol::Plain,
         }
     }
 }
@@ -85,17 +153,9 @@ struct Frame {
     flags: u8,
 }
 
-/// A telegram being collected.
-struct Tele {
-    start: u64,
-    end: u64,
-    count: u32,
-    flags: u8,
-}
-
 pub struct Uart {
     cfg: UartConfig,
-    tele: Option<Tele>,
+    layer: Box<dyn ByteLayer>,
     /// Samples per bit.
     bit: f64,
     primed: bool,
@@ -106,9 +166,17 @@ pub struct Uart {
 
 impl Uart {
     pub fn new(cfg: UartConfig) -> Self {
+        let layer: Box<dyn ByteLayer> = match cfg.protocol {
+            Protocol::Plain => Box::new(Telegrams::new(
+                cfg.telegrams,
+                cfg.telegram_gap_bits(),
+                cfg.telegram_lf,
+            )),
+            Protocol::ModbusRtu => Box::new(ModbusRtu::new()),
+        };
         Self {
             cfg,
-            tele: None,
+            layer,
             bit: 0.0,
             primed: false,
             level: true,
@@ -122,68 +190,6 @@ impl Uart {
 
     fn parity_bits(&self) -> u32 {
         (self.cfg.parity != Parity::None) as u32
-    }
-
-    fn close_telegram(&mut self, out: &mut Vec<Annotation>) {
-        if let Some(t) = self.tele.take() {
-            out.push(Annotation {
-                start: t.start,
-                end: t.end,
-                value: t.count,
-                lane: 1,
-                kind: Kind::Telegram,
-                bits: 0,
-                flags: t.flags,
-            });
-        }
-    }
-
-    /// A character was decoded: it extends the current telegram or starts a new one.
-    fn add_char(&mut self, start: u64, end: u64, value: u32, flags: u8, out: &mut Vec<Annotation>) {
-        if !self.cfg.telegrams {
-            return;
-        }
-        let gap = (self.cfg.telegram_gap * self.bit) as u64;
-        if self
-            .tele
-            .as_ref()
-            .is_some_and(|t| start.saturating_sub(t.end) >= gap)
-        {
-            self.close_telegram(out);
-        }
-        let flags = flags & flag::ERROR;
-        match &mut self.tele {
-            Some(t) => {
-                t.end = end;
-                t.count += 1;
-                t.flags |= flags;
-            }
-            None => {
-                self.tele = Some(Tele {
-                    start,
-                    end,
-                    count: 1,
-                    flags,
-                })
-            }
-        }
-        if self.cfg.telegram_lf && value == 0x0A {
-            self.close_telegram(out);
-        }
-    }
-
-    /// The line has been idle up to `horizon` (or up to the start of the frame in progress): a telegram
-    /// whose gap is over is complete.
-    fn flush_telegram(&mut self, horizon: u64, out: &mut Vec<Annotation>) {
-        let until = self.frame.as_ref().map_or(horizon, |f| f.t0.min(horizon));
-        let gap = (self.cfg.telegram_gap * self.bit) as u64;
-        if self
-            .tele
-            .as_ref()
-            .is_some_and(|t| until.saturating_sub(t.end) >= gap)
-        {
-            self.close_telegram(out);
-        }
     }
 
     fn stop_samples(&self) -> u32 {
@@ -202,11 +208,11 @@ impl Decoder for Uart {
     }
 
     fn lanes(&self) -> &'static [&'static str] {
-        &["RX", "Telegram"]
+        self.layer.lanes()
     }
 
     fn lane_used(&self, lane: usize) -> bool {
-        lane == 0 || self.cfg.telegrams
+        lane == 0 || self.layer.lane_used(lane)
     }
 
     fn mask(&self) -> u32 {
@@ -218,7 +224,11 @@ impl Decoder for Uart {
         self.primed = false;
         self.level = true;
         self.frame = None;
-        self.tele = None;
+        self.layer.reset(CharTiming {
+            sample_rate,
+            bit: self.bit,
+            char_bits: self.cfg.char_bits(),
+        });
     }
 
     fn change(&mut self, t: u64, state: u32, out: &mut Vec<Annotation>) {
@@ -244,7 +254,9 @@ impl Decoder for Uart {
 
     fn advance(&mut self, end: u64, out: &mut Vec<Annotation>) {
         self.advance_frames(end, out);
-        self.flush_telegram(end, out);
+        // The line is idle up to `end`, or up to the start of the frame in progress.
+        let until = self.frame.as_ref().map_or(end, |f| f.t0.min(end));
+        self.layer.idle(until, out);
     }
 }
 
@@ -304,7 +316,7 @@ impl Uart {
                         (f.t0 as f64 + slots * self.bit).round() as u64,
                         f.value,
                     );
-                    out.push(Annotation {
+                    let c = Annotation {
                         start,
                         end: stop,
                         value,
@@ -312,9 +324,10 @@ impl Uart {
                         kind: Kind::Data,
                         bits: self.cfg.data_bits,
                         flags,
-                    });
+                    };
+                    out.push(c);
                     self.frame = None;
-                    self.add_char(start, stop, value, flags, out);
+                    self.layer.char(&c, out);
                     return;
                 }
             }
@@ -532,6 +545,38 @@ mod tests {
         let t = telegrams(&a);
         assert_eq!(t.len(), 1);
         assert_eq!(text(&a, t[0]), "AB\\nCD\\r\\n");
+    }
+
+    #[test]
+    fn the_gap_can_be_given_in_characters() {
+        assert_eq!(UartConfig::default().char_bits(), 10.0);
+        let chars = UartConfig {
+            telegram_gap: 2.4,
+            telegram_gap_unit: GapUnit::Chars,
+            ..Default::default()
+        };
+        assert!((chars.telegram_gap_bits() - 24.0).abs() < 1e-9);
+        let e81 = UartConfig {
+            parity: Parity::Even,
+            ..chars.clone()
+        };
+        assert!((e81.telegram_gap_bits() - 2.4 * 11.0).abs() < 1e-9);
+        // 30 idle bit times between two words: split at 24 bits (2.4 characters), not at 4 characters.
+        let plain = UartConfig::default();
+        let bit = RATE / plain.baud;
+        let mut w = Wave::new(RATE, 120_000, 1);
+        let end = w.uart(0, 100, &plain, b"HELLO");
+        w.uart(0, end + (30.0 * bit) as u64, &plain, b"WORLD");
+        let n = |c: UartConfig| telegrams(&decode_lanes(c, &w)).len();
+        assert_eq!(n(plain), 2);
+        assert_eq!(n(chars.clone()), 2);
+        assert_eq!(
+            n(UartConfig {
+                telegram_gap: 4.0,
+                ..chars
+            }),
+            1
+        );
     }
 
     #[test]

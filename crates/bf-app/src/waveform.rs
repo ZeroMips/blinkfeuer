@@ -321,8 +321,11 @@ fn annotation_color(a: &Annotation, base: Color32) -> Color32 {
         theme::DEC_WARN
     } else {
         match a.kind {
-            Kind::Address => theme::DEC_ADDR,
-            Kind::Start | Kind::Stop => theme::DEC_MARK,
+            Kind::Address | Kind::ModbusAddress => theme::DEC_ADDR,
+            Kind::Start | Kind::Stop | Kind::ModbusFunction => theme::DEC_MARK,
+            Kind::ModbusException => theme::DEC_WARN,
+            // A frame whose function code has the exception bit set.
+            Kind::ModbusFrame if a.value & 0x80 != 0 => theme::DEC_WARN,
             _ => base,
         }
     }
@@ -412,7 +415,7 @@ pub fn draw_annotations(
                     );
                 }
             }
-            Kind::Telegram => {
+            Kind::Telegram | Kind::ModbusFrame => {
                 let (xa, xb) = (x0, x1.max(x0 + 1.0));
                 if xb - xa < 2.0 {
                     painter.rect_filled(
@@ -428,9 +431,17 @@ pub fn draw_annotations(
                 // The text stays at the left edge of the visible part, so a long telegram can be read
                 // while scrolling through it.
                 let (vx0, vx1) = (xa.max(rect.left()), xb.min(rect.right()));
-                if let Some(chars) = companion.filter(|_| vx1 - vx0 > 14.0) {
-                    let max_chars = ((vx1 - vx0) / 6.0) as usize + 4;
-                    let text = telegram_text(telegram_chars(chars, ann), fmt, max_chars);
+                // A telegram shows its characters, a Modbus frame its summary.
+                let text = match companion {
+                    _ if vx1 - vx0 <= 14.0 => None,
+                    Some(chars) if ann.kind == Kind::Telegram => {
+                        let max_chars = ((vx1 - vx0) / 6.0) as usize + 4;
+                        Some(telegram_text(telegram_chars(chars, ann), fmt, max_chars))
+                    }
+                    _ if ann.kind == Kind::Telegram => None,
+                    _ => Some(ann.label(fmt)),
+                };
+                if let Some(text) = text {
                     let clip = painter.with_clip_rect(Rect::from_min_max(
                         pos2(vx0 + 1.0, top),
                         pos2(vx1 - 1.0, bottom),

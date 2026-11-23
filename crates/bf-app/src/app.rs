@@ -124,6 +124,11 @@ impl DeviceChoice {
     }
 }
 
+/// A UART decoder showing plain characters (text), as opposed to a binary protocol on top.
+fn is_text_uart(cfg: &Config) -> bool {
+    matches!(cfg, Config::Uart(c) if c.protocol == bf_decode::uart::Protocol::Plain)
+}
+
 /// A quarter of the machine's memory (at least 1 GiB, at most 32 GiB) is a sensible default for the
 /// capture store.
 fn default_memory_mib() -> u64 {
@@ -1327,8 +1332,9 @@ impl App {
     fn add_decoder(&mut self, cfg: Config) {
         let handle = self.engine.add(cfg.build());
         let name = cfg.kind().label().to_string();
-        // UART output is mostly text: show characters and telegrams as ASCII by default.
-        let format = if matches!(cfg, Config::Uart(_)) {
+        // UART output is mostly text: show characters and telegrams as ASCII by default (binary
+        // protocols such as Modbus in hex).
+        let format = if is_text_uart(&cfg) {
             Format::Ascii
         } else {
             Format::Hex
@@ -1348,6 +1354,10 @@ impl App {
         let old = self.decoders[i].handle.id;
         self.engine.remove(old);
         self.decoders[i].handle = self.engine.add(self.decoders[i].cfg.build());
+        // A UART switched to a binary protocol: ASCII would show its bytes as garbage.
+        if !is_text_uart(&self.decoders[i].cfg) && self.decoders[i].format == Format::Ascii {
+            self.decoders[i].format = Format::Hex;
+        }
         self.layout
             .replace_decoder(old.0, self.decoders[i].handle.id.0);
         self.selected_ann = None;

@@ -9,6 +9,8 @@
 pub mod baud;
 pub mod engine;
 pub mod i2c;
+pub mod layer;
+pub mod modbus;
 pub mod spi;
 pub mod synth;
 pub mod trigger;
@@ -31,6 +33,24 @@ pub enum Kind {
     /// Consecutive UART characters forming one message: `value` is the number of characters. The text
     /// is the lane-0 annotations inside `start..end` (see [`telegram_chars`]).
     Telegram,
+    /// A Modbus RTU frame: `value` is `address << 8 | function code`, `bits` says whether it is a
+    /// request ([`modbus::REQUEST`]), a response ([`modbus::RESPONSE`]) or unknown (0).
+    ModbusFrame,
+    /// Modbus fields (one per field of a frame, on the fields lane).
+    ModbusAddress,
+    ModbusFunction,
+    /// First register (or coil) address of a request.
+    ModbusRegister,
+    /// Number of registers or coils.
+    ModbusQuantity,
+    ModbusByteCount,
+    /// A 16-bit register value.
+    ModbusValue,
+    /// A data byte (coil and input bits, or the payload of other functions).
+    ModbusData,
+    ModbusException,
+    /// The CRC as transmitted (low byte first on the wire, shown as one 16-bit value).
+    ModbusCrc,
 }
 
 /// Bits of [`Annotation::flags`].
@@ -46,8 +66,10 @@ pub mod flag {
     pub const READ: u8 = 32;
     /// I2C START in the middle of a transaction.
     pub const REPEATED: u8 = 64;
+    /// A checksum (Modbus CRC) does not match.
+    pub const CHECKSUM: u8 = 128;
     /// The flags that mean "this decoded wrongly or incompletely".
-    pub const ERROR: u8 = FRAMING | PARITY | BREAK | INCOMPLETE;
+    pub const ERROR: u8 = FRAMING | PARITY | BREAK | INCOMPLETE | CHECKSUM;
 }
 
 /// A decoded item covering samples `start..end` on one lane of its decoder.
@@ -178,6 +200,16 @@ impl Annotation {
                 format!("{} {}", format_value(self.value, 7, Format::Hex), rw)
             }
             Kind::Data => format_value(self.value, self.bits, fmt),
+            Kind::ModbusFrame
+            | Kind::ModbusAddress
+            | Kind::ModbusFunction
+            | Kind::ModbusRegister
+            | Kind::ModbusQuantity
+            | Kind::ModbusByteCount
+            | Kind::ModbusValue
+            | Kind::ModbusData
+            | Kind::ModbusException
+            | Kind::ModbusCrc => modbus::label(self, fmt),
         };
         if self.flags & flag::BREAK != 0 {
             s.push_str(" BRK");
@@ -192,6 +224,9 @@ impl Annotation {
         }
         if self.flags & flag::NAK != 0 {
             s.push_str(" NAK");
+        }
+        if self.flags & flag::CHECKSUM != 0 && self.kind != Kind::ModbusCrc {
+            s.push_str(" BAD CRC");
         }
         s
     }
