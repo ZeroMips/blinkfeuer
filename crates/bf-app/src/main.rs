@@ -2,6 +2,7 @@ mod app;
 mod decode_preview;
 mod decode_ui;
 mod file_dialog;
+mod icon;
 mod markers;
 mod measure_ui;
 mod rows;
@@ -22,6 +23,10 @@ pub struct Opts {
     pub rate: Option<f64>,
     /// Save a screenshot of the window to this path after `after` seconds and exit.
     pub screenshot: Option<String>,
+    /// Write the application icon as a PNG file (and its size in pixels) and exit.
+    pub write_icon: Option<(String, u32)>,
+    /// Install the icon and a desktop entry and exit: below this folder, or for the user when empty.
+    pub install_desktop: Option<String>,
     pub after: f64,
     /// Initial view after the capture ended: left sample and samples per pixel.
     pub zoom_start: Option<f64>,
@@ -99,6 +104,20 @@ fn parse_opts() -> Opts {
             "--samples" => o.samples = Some(val().parse().expect("--samples N")),
             "--rate" => o.rate = Some(val().parse().expect("--rate HZ")),
             "--screenshot" => o.screenshot = Some(val()),
+            "--install-desktop" => o.install_desktop = Some(String::new()),
+            a if a.starts_with("--install-desktop=") => {
+                o.install_desktop = Some(a["--install-desktop=".len()..].to_string());
+            }
+            "--write-icon" => {
+                let v = val();
+                o.write_icon = Some(match v.split_once(',') {
+                    Some((path, size)) => (
+                        path.to_string(),
+                        size.parse().expect("--write-icon PATH[,SIZE]"),
+                    ),
+                    None => (v, 256),
+                });
+            }
             "--after" => o.after = val().parse().expect("--after SECONDS"),
             "--zoom-start" => o.zoom_start = Some(val().parse().expect("--zoom-start SAMPLE")),
             "--zoom-spp" => o.zoom_spp = Some(val().parse().expect("--zoom-spp SAMPLES_PER_PIXEL")),
@@ -145,7 +164,9 @@ fn parse_opts() -> Opts {
                 println!(
                     "          [--screenshot PATH [--after SECS]] [--zoom-start S --zoom-spp P]"
                 );
-                println!("          [--markers S1,S2] [--expand] [--setup]");
+                println!(
+                    "          [--markers S1,S2] [--expand] [--setup] [--write-icon PATH[,SIZE]] [--install-desktop[=DIR]]"
+                );
                 std::process::exit(0);
             }
             other => panic!("unknown option {other}"),
@@ -154,12 +175,65 @@ fn parse_opts() -> Opts {
     o
 }
 
+/// Under WSLg, use X11 instead of Wayland: the window shows its own icon there (a Wayland window
+/// cannot), and WSLg's compositor (weston 1.0.7x) crashed with SIGSEGV now and then when it matched a
+/// Wayland window to the installed desktop entry. `BLINKFEUER_WAYLAND=1` keeps Wayland.
+fn prefer_x11_under_wslg() {
+    let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some();
+    let keep = std::env::var_os("BLINKFEUER_WAYLAND").is_some_and(|v| v == "1");
+    if wsl && !keep && std::env::var_os("DISPLAY").is_some() {
+        // Still single-threaded here, before the event loop starts.
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::remove_var("WAYLAND_SOCKET");
+    }
+}
+
 fn main() -> eframe::Result {
     let opts = parse_opts();
+    if let Some((path, size)) = &opts.write_icon {
+        if let Err(e) = icon::write_png(path, *size) {
+            eprintln!("blinkfeuer: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if let Some(prefix) = &opts.install_desktop {
+        let data_home = if prefix.is_empty() {
+            std::env::var_os("XDG_DATA_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|h| h.join(".local/share")))
+        } else {
+            Some(std::path::PathBuf::from(prefix))
+        };
+        let exec = std::env::current_exe()
+            .and_then(|p| p.canonicalize())
+            .map(|p| p.to_string_lossy().into_owned());
+        match (data_home, exec) {
+            (Some(dir), Ok(exec)) => match icon::install_desktop(&dir, &exec) {
+                Ok(files) => {
+                    for f in files {
+                        println!("{f}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("blinkfeuer: {e}");
+                    std::process::exit(1);
+                }
+            },
+            _ => {
+                eprintln!("blinkfeuer: cannot find the home directory or this program's path");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+    prefer_x11_under_wslg();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
-            .with_title("Blinkfeuer"),
+            .with_title("Blinkfeuer")
+            .with_app_id(icon::APP_ID)
+            .with_icon(std::sync::Arc::new(icon::icon_data())),
         ..Default::default()
     };
     eframe::run_native(

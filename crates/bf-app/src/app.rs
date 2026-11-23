@@ -329,6 +329,9 @@ pub struct App {
     row_auto: bool,
     show_setup: bool,
     show_keys: bool,
+    show_about: bool,
+    /// The application icon as a texture (for the About window), made when first needed.
+    icon_texture: Option<egui::TextureHandle>,
     show_decoders: bool,
     show_table: bool,
     show_trigger: bool,
@@ -421,6 +424,8 @@ impl App {
             row_auto: true,
             show_setup: false,
             show_keys: false,
+            show_about: false,
+            icon_texture: None,
             show_decoders: false,
             show_table: false,
             show_trigger: false,
@@ -745,6 +750,11 @@ impl App {
             ui.menu_button("Help", |ui| {
                 if ui.button("Mouse and keys...").clicked() {
                     self.show_keys = true;
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("About Blinkfeuer...").clicked() {
+                    self.show_about = true;
                     ui.close_menu();
                 }
             });
@@ -2485,6 +2495,71 @@ impl App {
         }
     }
 
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.show_about {
+            return;
+        }
+        let icon = self
+            .icon_texture
+            .get_or_insert_with(|| {
+                let size = 192;
+                ctx.load_texture(
+                    "blinkfeuer-icon",
+                    egui::ColorImage::from_rgba_unmultiplied(
+                        [size, size],
+                        &crate::icon::render(size as u32),
+                    ),
+                    egui::TextureOptions::LINEAR,
+                )
+            })
+            .clone();
+        let dim = |t: &str| RichText::new(t.to_string()).color(theme::TEXT_DIM);
+        egui::Window::new("About Blinkfeuer")
+            .open(&mut self.show_about)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                ui.horizontal(|ui| {
+                    ui.add(egui::Image::new((icon.id(), vec2(96.0, 96.0))));
+                    ui.vertical(|ui| {
+                        ui.add_space(14.0);
+                        ui.label(RichText::new("Blinkfeuer").size(24.0).strong());
+                        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+                        ui.label(dim("A logic analyzer for Linux"));
+                    });
+                });
+                ui.add_space(8.0);
+                ui.label(
+                    "Blinkfeuer is the old German word for a flashing beacon, the light that tells \
+                     you something is out there.",
+                );
+                ui.add_space(8.0);
+                ui.label(dim("Analyzers"));
+                ui.label("Sipeed SLogic16U3 (stock firmware or LiteX gateware)");
+                ui.label(
+                    "FX2 analyzers such as the Saleae Logic clones (sigrok's fx2lafw firmware)",
+                );
+                ui.label("Built-in simulator");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(dim("Licence"));
+                    ui.label(env!("CARGO_PKG_LICENSE"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(dim("Source"));
+                    ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
+                });
+                ui.add_space(8.0);
+                ui.label(dim(
+                    "The fx2lafw firmware is part of sigrok and licensed under the GPL; it is not \
+                     shipped with Blinkfeuer but loaded from the system. Blinkfeuer is built with \
+                     egui.",
+                ));
+            });
+    }
+
     fn keys_window(&mut self, ctx: &egui::Context) {
         egui::Window::new("Mouse and keys")
             .open(&mut self.show_keys)
@@ -2945,6 +3020,7 @@ impl eframe::App for App {
             );
         }
         self.keys_window(ctx);
+        self.about_window(ctx);
         if self.opts.color_demo {
             egui::Window::new("Color picker").show(ctx, |ui| {
                 let mut c = crate::rows::PALETTE[3];

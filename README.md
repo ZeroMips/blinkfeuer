@@ -76,6 +76,23 @@ cargo run --release -p bf-app --bin bfcli -- --help         # command line captu
 cargo test --workspace
 ```
 
+To get the icon in the task bar and the application in the menu, install a desktop entry and the icon,
+pointing at the binary you run it from. For your user (into `~/.local/share`):
+
+```sh
+target/release/blinkfeuer --install-desktop
+```
+
+WSLg only reads desktop entries from the system folders, so under WSL install them there instead:
+
+```sh
+sudo target/release/blinkfeuer --install-desktop=/usr/local/share
+```
+
+Under WSL blinkfeuer opens its window over X11 (XWayland), where the window shows its own icon; with
+Wayland, WSLg's compositor crashed now and then once the desktop entry was installed (all WSL windows go
+away with it). `BLINKFEUER_WAYLAND=1` keeps Wayland.
+
 To use the analyzer without root, install the udev rule and replug it:
 
 ```sh
