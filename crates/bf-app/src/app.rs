@@ -949,6 +949,7 @@ impl App {
             ui.separator();
             ui.add_enabled_ui(!running, |ui| {
                 ui.label(dim("Device"));
+                let device_before = self.device;
                 egui::ComboBox::from_id_salt("device")
                     .selected_text(self.device.label())
                     .show_ui(ui, |ui| {
@@ -970,7 +971,9 @@ impl App {
                             }
                         }
                     });
-                if !self.device.patterns().contains(&self.pattern) {
+                // Another device starts with its own default pattern: the simulator with the generator
+                // (its "inputs" are idle lines), an analyzer with its inputs.
+                if self.device != device_before || !self.device.patterns().contains(&self.pattern) {
                     self.pattern = self.device.patterns()[0];
                 }
                 let channel_options = self.device.channel_options();
