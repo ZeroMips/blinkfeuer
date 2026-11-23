@@ -1,9 +1,11 @@
 //! Files: capture files, setup files, exports, and the setup that is kept between runs.
 //!
-//! Dialogs run on their own thread (the window keeps repainting while one is open), and reading or
-//! writing a capture runs on a background thread too, so a large capture never freezes the UI.
+//! File dialogs are blinkfeuer's own (`crate::file_dialog`), drawn in the window, so they work the same
+//! everywhere (no desktop portal needed). Reading or writing a capture runs on a background thread,
+//! so a large capture never freezes the UI.
 
 use super::*;
+use crate::file_dialog::{FileDialog, Outcome};
 use crate::setup::{self, DecoderSetup, Setup};
 use bf_io::{read_capture, read_sr, write_capture, write_vcd, VcdSignal};
 use std::io::{BufReader, BufWriter};
@@ -391,38 +393,43 @@ impl App {
 
     // ------------------------------------------------------------ dialogs and jobs
 
-    pub(super) fn ask_file(&mut self, p: Purpose) {
-        let (tx, rx) = channel();
-        let dir = self.last_dir.clone();
-        let name = self
-            .file
-            .as_ref()
-            .and_then(|f| f.file_stem())
-            .map(|s| format!("{}.{}", s.to_string_lossy(), p.filter().1));
-        std::thread::spawn(move || {
-            let (label, ext) = p.filter();
-            let mut d = rfd::FileDialog::new().set_title(p.title());
-            d = if p == Purpose::OpenCapture {
-                // Blinkfeuer captures and sigrok sessions (PulseView, sigrok-cli).
-                d.add_filter("Captures (.bfc, .sr)", &["bfc", "sr"])
-                    .add_filter(label, &[ext])
-                    .add_filter("sigrok session", &["sr"])
-            } else {
-                d.add_filter(label, &[ext])
-            };
-            d = d.add_filter("All files", &["*"]);
-            if let Some(dir) = dir {
-                d = d.set_directory(dir);
-            }
-            let path = if p.saves() {
-                d.set_file_name(name.unwrap_or_else(|| p.default_name().to_string()))
-                    .save_file()
-            } else {
-                d.pick_file()
-            };
-            let _ = tx.send(path);
+    /// Filters (label, extensions) and the proposed file name (when saving).
+    fn dialog_spec(&self, p: Purpose) -> (Vec<(String, Vec<String>)>, Option<String>) {
+        let (label, ext) = p.filter();
+        let mut filters: Vec<(&str, Vec<&str>)> = if p == Purpose::OpenCapture {
+            // Blinkfeuer captures and sigrok sessions (PulseView, sigrok-cli).
+            vec![
+                ("Captures (.bfc, .sr)", vec!["bfc", "sr"]),
+                (label, vec![ext]),
+                ("sigrok session", vec!["sr"]),
+            ]
+        } else {
+            vec![(label, vec![ext])]
+        };
+        filters.push(("All files", vec!["*"]));
+        let filters = filters
+            .into_iter()
+            .map(|(l, e)| (l.to_string(), e.into_iter().map(String::from).collect()))
+            .collect();
+        let name = p.saves().then(|| {
+            self.file
+                .as_ref()
+                .and_then(|f| f.file_stem())
+                .map(|s| format!("{}.{}", s.to_string_lossy(), ext))
+                .unwrap_or_else(|| p.default_name().to_string())
         });
-        self.dialog = Some((p, rx));
+        (filters, name)
+    }
+
+    pub(super) fn ask_file(&mut self, p: Purpose) {
+        let (filters, name) = self.dialog_spec(p);
+        let dialog = FileDialog::new(p.title(), p.saves(), self.last_dir.clone(), name, filters);
+        self.dialog = Some((p, Box::new(dialog)));
+    }
+
+    /// A file dialog is open: the window's own shortcuts are off meanwhile.
+    pub(super) fn file_dialog_open(&self) -> bool {
+        self.dialog.is_some()
     }
 
     fn spawn_job(&mut self, label: String, f: impl FnOnce() -> JobResult + Send + 'static) {
@@ -437,17 +444,15 @@ impl App {
 
     /// Check on the open dialog and the running job.
     pub(super) fn poll_files(&mut self, ctx: &egui::Context) {
-        if let Some((p, rx)) = &self.dialog {
+        if let Some((p, dialog)) = &mut self.dialog {
             let p = *p;
-            match rx.try_recv() {
-                Ok(path) => {
+            match dialog.show(ctx) {
+                Some(Outcome::Chosen(path)) => {
                     self.dialog = None;
-                    if let Some(path) = path {
-                        self.file_chosen(p, path);
-                    }
+                    self.file_chosen(p, path);
                 }
-                Err(TryRecvError::Empty) => ctx.request_repaint_after(Duration::from_millis(100)),
-                Err(TryRecvError::Disconnected) => self.dialog = None,
+                Some(Outcome::Cancelled) => self.dialog = None,
+                None => {}
             }
         }
         if let Some(job) = &self.job {

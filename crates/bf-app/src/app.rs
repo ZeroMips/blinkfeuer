@@ -376,10 +376,7 @@ pub struct App {
     /// Capture file of the data on screen.
     file: Option<std::path::PathBuf>,
     last_dir: Option<std::path::PathBuf>,
-    dialog: Option<(
-        files::Purpose,
-        std::sync::mpsc::Receiver<Option<std::path::PathBuf>>,
-    )>,
+    dialog: Option<(files::Purpose, Box<crate::file_dialog::FileDialog>)>,
     job: Option<files::Job>,
     /// A message for the status bar: text, when, is an error.
     notice: Option<(String, Instant, bool)>,
@@ -2641,23 +2638,25 @@ impl eframe::App for App {
             self.save_capture();
         }
 
+        // While a file dialog is open the keyboard belongs to it (its text fields, Escape).
+        let keys = !self.file_dialog_open();
         let (f5, f8, home) = ctx.input(|i| {
             (
-                i.key_pressed(Key::F5),
-                i.key_pressed(Key::F8),
-                i.key_pressed(Key::Home),
+                keys && i.key_pressed(Key::F5),
+                keys && i.key_pressed(Key::F8),
+                keys && i.key_pressed(Key::Home),
             )
         });
         let (taller, shorter) = ctx.input(|i| {
             (
-                i.modifiers.command && i.key_pressed(Key::ArrowUp),
-                i.modifiers.command && i.key_pressed(Key::ArrowDown),
+                keys && i.modifiers.command && i.key_pressed(Key::ArrowUp),
+                keys && i.modifiers.command && i.key_pressed(Key::ArrowDown),
             )
         });
         let (find, f3, shift_held) = ctx.input(|i| {
             (
-                i.modifiers.command && i.key_pressed(Key::F),
-                i.key_pressed(Key::F3),
+                keys && i.modifiers.command && i.key_pressed(Key::F),
+                keys && i.key_pressed(Key::F3),
                 i.modifiers.shift,
             )
         });

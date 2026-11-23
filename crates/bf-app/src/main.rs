@@ -1,6 +1,7 @@
 mod app;
 mod decode_preview;
 mod decode_ui;
+mod file_dialog;
 mod markers;
 mod measure_ui;
 mod rows;

@@ -24,7 +24,6 @@ egui = "0.30"
 image = { version = "0.25.6", default-features = false, features = ["png"] }
 bf-decode = { version = "0.1.0", path = "../bf-decode" }
 bf-io = { path = "../bf-io" }
-rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 dirs = "7.0.0"
