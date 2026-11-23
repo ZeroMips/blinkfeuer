@@ -836,8 +836,12 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
         return true;
     }
     if a.kind == Kind::Telegram {
-        // A telegram matches on its text (in the display format and in hex) and its lane name.
+        // A telegram matches on its text (in the display format and in hex), on a byte sequence and on
+        // its lane name.
         let cs = bf_decode::telegram_chars(chars, a);
+        if query_bytes(q).is_some_and(|b| contains_bytes(cs, &b)) {
+            return true;
+        }
         let mut t = bf_decode::telegram_text(cs, fmt, usize::MAX);
         t.make_ascii_lowercase();
         if t.contains(q) {
@@ -846,6 +850,11 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
         let mut h = bf_decode::telegram_text(cs, Format::Hex, usize::MAX);
         h.make_ascii_lowercase();
         return h.contains(q) || lane.to_ascii_lowercase().contains(q);
+    }
+    if a.kind == Kind::ModbusFrame
+        && query_bytes(q).is_some_and(|b| contains_bytes(bf_decode::telegram_chars(chars, a), &b))
+    {
+        return true;
     }
     let mut label = a.label(fmt);
     label.make_ascii_lowercase();
@@ -862,6 +871,41 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
     lane.to_ascii_lowercase().contains(q)
         || (a.flags != 0 || a.kind == Kind::Address || a.kind == Kind::ModbusFrame)
             && info_with_bytes(a, chars).to_ascii_lowercase().contains(q)
+}
+
+/// A search query read as a byte sequence: hex bytes separated by spaces or commas, each with an
+/// optional `0x` or `\x` ("65 06", "0x65,0x06", "\x65\x06"), or one run of an even number of hex
+/// digits ("6506"). `None` if it is not one.
+fn query_bytes(q: &str) -> Option<Vec<u32>> {
+    let s = q.replace("\\x", " ").replace([',', ';'], " ");
+    let tokens: Vec<&str> = s
+        .split_whitespace()
+        .map(|t| t.strip_prefix("0x").unwrap_or(t))
+        .collect();
+    let hex = |t: &str| !t.is_empty() && t.chars().all(|c| c.is_ascii_hexdigit());
+    let bytes: Vec<u32> = match tokens.as_slice() {
+        [] => return None,
+        [one] if one.len() >= 2 && one.len() % 2 == 0 && hex(one) => (0..one.len())
+            .step_by(2)
+            .map(|i| u32::from_str_radix(&one[i..i + 2], 16))
+            .collect::<Result<_, _>>()
+            .ok()?,
+        many if many.len() > 1 && many.iter().all(|t| t.len() <= 2 && hex(t)) => many
+            .iter()
+            .map(|t| u32::from_str_radix(t, 16))
+            .collect::<Result<_, _>>()
+            .ok()?,
+        _ => return None,
+    };
+    Some(bytes)
+}
+
+/// The characters contain `seq` as consecutive values.
+fn contains_bytes(chars: &[Annotation], seq: &[u32]) -> bool {
+    !seq.is_empty()
+        && chars
+            .windows(seq.len())
+            .any(|w| w.iter().map(|a| a.value).eq(seq.iter().copied()))
 }
 
 /// The row to jump to from the selection (the row whose annotation starts at `sel`) in direction `dir`
@@ -1001,7 +1045,9 @@ pub fn table_ui(
                 }
             });
         }
-        let r = ui.add(egui::TextEdit::singleline(&mut st.filter).hint_text("search (Ctrl+F)").desired_width(190.0));
+        let r = ui
+            .add(egui::TextEdit::singleline(&mut st.filter).hint_text("search (Ctrl+F)").desired_width(190.0))
+            .on_hover_text("Text or values. Telegrams and Modbus frames are also searched for byte sequences: 65 06, 6506, 0x65,0x06 or \\x65\\x06.");
         r.clone().on_hover_text("Finds values (in the display format or hex), lane names and words like nak, framing, parity, break, read, write.\nSearches the whole capture, not only what is visible.");
         if st.focus_search {
             r.request_focus();
@@ -1387,6 +1433,45 @@ mod tests {
         assert!(matches(&frame, "Frame", "crc", Format::Hex, &chars));
         assert!(!matches(&frame, "Frame", "65 03", Format::Hex, &chars));
         assert_eq!(info_with_bytes(&frame, &chars), "65 06 01 01  (CRC error)");
+    }
+
+    #[test]
+    fn byte_sequences_are_found_in_any_notation() {
+        assert_eq!(query_bytes("6506"), Some(vec![0x65, 0x06]));
+        assert_eq!(query_bytes("65 06 01"), Some(vec![0x65, 0x06, 0x01]));
+        assert_eq!(query_bytes("0x65,0x06"), Some(vec![0x65, 0x06]));
+        assert_eq!(query_bytes("0x65, 6"), Some(vec![0x65, 0x06]));
+        assert_eq!(query_bytes("\\x65\\x06"), Some(vec![0x65, 0x06]));
+        assert_eq!(query_bytes("ok"), None);
+        assert_eq!(query_bytes("650"), None, "odd number of digits");
+        assert_eq!(query_bytes("hello world"), None);
+        assert_eq!(query_bytes(""), None);
+
+        let chars: Vec<Annotation> = [0x65u32, 0x06, 0x01, 0x01, 0x00]
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| Annotation {
+                start: i as u64 * 10,
+                end: i as u64 * 10 + 10,
+                ..ann(Kind::Data, v, 0)
+            })
+            .collect();
+        let t = Annotation {
+            start: 0,
+            end: 50,
+            lane: 1,
+            ..ann(Kind::Telegram, 5, 0)
+        };
+        for q in ["6506", "0x06 0x01", "\\x01\\x01\\x00", "06,01,01"] {
+            assert!(matches(&t, "Telegram", q, Format::Ascii, &chars), "{q}");
+        }
+        assert!(!matches(&t, "Telegram", "0601 00", Format::Ascii, &chars));
+        assert!(!matches(&t, "Telegram", "0665", Format::Hex, &chars));
+        let frame = Annotation {
+            kind: Kind::ModbusFrame,
+            ..t
+        };
+        assert!(matches(&frame, "Frame", "65060101", Format::Hex, &chars));
     }
 
     #[test]
