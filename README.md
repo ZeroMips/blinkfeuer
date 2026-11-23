@@ -45,8 +45,8 @@ A working first version. What is verified and what is not:
   drag and drop reordering, hiding rows. Decoders can sit inside groups.
 - **Protocol decoders** for UART, SPI and I2C, written to be fast (cost proportional to the number of
   edges, not samples), with a setup screen that shows example traces for the chosen settings. UART
-  characters are also grouped into readable telegrams, and the UART baud rate can be detected from the
-  capture (also in the trigger setup).
+  characters are also grouped into readable telegrams, and the UART baud rate and frame format (data
+  bits, parity, stop bits) can be detected from the capture (also in the trigger setup).
 - **Modbus RTU** on top of the UART decoder: frames found by the pause between them and checked by their
   CRC (also when a device answers too fast), each frame split into address, function, registers,
   values and CRC, with requests and responses told apart where the function allows it.

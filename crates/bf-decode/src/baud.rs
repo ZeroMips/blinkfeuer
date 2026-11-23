@@ -85,10 +85,13 @@ fn fit(widths: &[f64], t: f64) -> (f64, f64) {
     (ok as f64 / n as f64, wk / kk)
 }
 
+/// Fewest edges [`detect`] works with.
+pub const MIN_EDGES: usize = 13;
+
 /// Detect the baud rate from the sample numbers of the edges (both directions) of the RX line.
 pub fn detect(edges: &[u64], sample_rate: f64) -> Result<BaudGuess, String> {
     let widths: Vec<f64> = edges.windows(2).map(|w| (w[1] - w[0]) as f64).collect();
-    if widths.len() < 12 {
+    if edges.len() < MIN_EDGES {
         return Err(format!(
             "only {} edges on this channel: capture some UART traffic first",
             edges.len()

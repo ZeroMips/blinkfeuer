@@ -8,6 +8,7 @@
 
 pub mod baud;
 pub mod engine;
+pub mod framing;
 pub mod i2c;
 pub mod layer;
 pub mod modbus;

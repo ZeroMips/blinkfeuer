@@ -88,8 +88,9 @@ mod help {
     pub const FORMAT: &str = "How data values are displayed: hexadecimal, decimal, binary or ASCII (characters; control codes as \\r, \\n ...). Only changes the display, not the decoding.";
 
     pub const UART_RX: &str = "Channel that carries the serial data. Connect it to the TX pin of the device under test. The line idles high (low if 'Inverted' is on).";
-    pub const UART_DETECT: &str = "Measures the pulse widths on the RX channel of the current capture (between M1 and M2 when both markers are set, else all of it) and suggests the baud rate. It needs UART traffic in the capture and a sample rate of about 8 times the baud rate or more.";
+    pub const UART_DETECT: &str = "Measures the pulse widths on the RX channel over the whole capture and suggests the baud rate. It needs UART traffic in the capture and a sample rate of about 8 times the baud rate or more.";
     pub const UART_BAUD: &str = "Bit rate in bits per second (9600, 115200, ...). The decoder uses sample rate / baud samples per bit, so a wrong value gives garbage or framing errors (FE). Capture at no less than about 8 times the baud rate.";
+    pub const UART_DETECT_FORMAT: &str = "Finds data bits, parity and stop bits by decoding the whole capture with each common format at the baud rate in the settings below (detect or set that first). The shortest frame that decodes without errors wins; parity is only chosen when it checks out in every character. 2 stop bits cannot be told from 1 when there are pauses between the characters, and 1 stop bit reads such traffic correctly.";
     pub const UART_BITS: &str = "Data bits per frame, 5 to 9 (usually 8).";
     pub const UART_PARITY: &str = "Extra bit after the data bits. Even/Odd: the number of 1 bits including the parity bit is even/odd. Mark: always 1. Space: always 0. A wrong parity bit is flagged PE; the byte is still shown.";
     pub const UART_STOP: &str = "Length of the idle period that ends a frame: 1, 1.5 or 2 bit times. The decoder checks the first stop bit: a low level there is a framing error (FE).";
@@ -288,6 +289,15 @@ pub struct BaudProbe {
     pub request: Option<u8>,
     /// The last answer and the channel it was for.
     pub result: Option<(u8, Result<bf_decode::baud::BaudGuess, String>)>,
+    /// Detect the frame format of this UART (channel, baud rate and polarity are used).
+    pub format_request: Option<UartConfig>,
+    /// The last answer and the settings it was for.
+    pub format_result: Option<(UartConfig, Result<bf_decode::framing::FormatGuess, String>)>,
+}
+
+/// The settings a frame format answer depends on.
+fn same_line(a: &UartConfig, b: &UartConfig) -> bool {
+    a.rx == b.rx && a.baud == b.baud && a.invert == b.invert && a.lsb_first == b.lsb_first
 }
 
 /// Edit a decoder's settings; true when anything changed. `telegrams: false` leaves out what only matters
@@ -310,18 +320,10 @@ pub fn config_ui_with(
                     });
                 });
             });
-            section(ui, "Frame format", |ui| {
-                grid(ui, &format!("{id}g2"), |ui| {
-                    changed |= param(ui, "Baud rate", help::UART_BAUD, |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut c.baud)
-                                .speed(100.0)
-                                .range(300.0..=20e6)
-                                .suffix(" baud"),
-                        )
-                    });
-                    if let Some(probe) = probe.as_deref_mut() {
-                        changed |= param(ui, "Auto-detect", help::UART_DETECT, |ui| {
+            if let Some(probe) = probe.as_deref_mut() {
+                section(ui, "Detect", |ui| {
+                    grid(ui, &format!("{id}g5"), |ui| {
+                        changed |= param(ui, "Baud rate", help::UART_DETECT, |ui| {
                             let mut used = false;
                             let mut r = ui
                                 .horizontal(|ui| {
@@ -367,7 +369,61 @@ pub fn config_ui_with(
                             }
                             r
                         });
-                    }
+                        changed |= param(ui, "Frame format", help::UART_DETECT_FORMAT, |ui| {
+                            let mut used = false;
+                            let mut r = ui
+                                .horizontal(|ui| {
+                                    if ui.button("Detect").clicked() {
+                                        probe.format_request = Some(c.clone());
+                                    }
+                                    match &probe.format_result {
+                                        Some((for_cfg, Ok(g))) if same_line(for_cfg, c) => {
+                                            ui.label(g.short());
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "{} characters, {} with errors",
+                                                    g.chars, g.errors
+                                                ))
+                                                .color(theme::TEXT_DIM),
+                                            );
+                                            if ui.button("Use").clicked() {
+                                                c.data_bits = g.data_bits;
+                                                c.parity = g.parity;
+                                                c.stop_bits = g.stop_bits;
+                                                used = true;
+                                            }
+                                            if let Some(n) = &g.note {
+                                                ui.label(
+                                                    RichText::new(n.as_str())
+                                                        .color(theme::TEXT_DIM),
+                                                );
+                                            }
+                                        }
+                                        Some((for_cfg, Err(e))) if same_line(for_cfg, c) => {
+                                            ui.colored_label(theme::DEC_ERR, e);
+                                        }
+                                        _ => {}
+                                    }
+                                })
+                                .response;
+                            if used {
+                                r.mark_changed();
+                            }
+                            r
+                        });
+                    });
+                });
+            }
+            section(ui, "Settings", |ui| {
+                grid(ui, &format!("{id}g2"), |ui| {
+                    changed |= param(ui, "Baud rate", help::UART_BAUD, |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut c.baud)
+                                .speed(100.0)
+                                .range(300.0..=20e6)
+                                .suffix(" baud"),
+                        )
+                    });
                     changed |= param(ui, "Data bits", help::UART_BITS, |ui| {
                         ui.add(egui::DragValue::new(&mut c.data_bits).range(5..=9))
                     });
