@@ -3,7 +3,8 @@
 //! Frames are delimited by silence on the line: 3.5 character times, or a fixed 1.75 ms above
 //! 19200 baud (Modbus over serial line, section 2.5.1.1). Devices often answer faster than that, so a
 //! block of characters whose CRC fails is also tried as two or more back-to-back frames, each with a
-//! valid CRC. Every frame is shown as a bar on the "Frame" lane (address and function) and split into
+//! valid CRC. Where no valid frame begins (a capture that starts inside a telegram, a disturbed
+//! character), decoding continues at the next one found in the block. Every frame is shown as a bar on the "Frame" lane (address and function) and split into
 //! its fields on the "Fields" lane.
 //!
 //! Whether a frame is a request or a response follows from its function code and length where that is
@@ -24,6 +25,11 @@ pub const RESPONSE: u8 = 2;
 const MAX_FRAME: usize = 256;
 /// The shortest frame with a CRC: address, function, CRC.
 const MIN_FRAME: usize = 4;
+/// Characters collected without a pause before they are split into frames: more than the longest
+/// frame, so that a frame cut off by the end of the block is still whole in the next one.
+const MAX_BLOCK: usize = MAX_FRAME + 64;
+/// The highest address of a slave (0 is the broadcast).
+const MAX_ADDRESS: u8 = 247;
 
 /// CRC-16/MODBUS (polynomial 0xA001 reflected, start 0xFFFF). Over a whole frame including its CRC
 /// (low byte first, as transmitted) the result is 0.
@@ -223,28 +229,53 @@ pub fn parse(frame: &[u8]) -> (u8, Vec<Field>) {
     (dir, f)
 }
 
+/// The end of the shortest frame with a valid CRC that begins at `i`.
+fn frame_end(bytes: &[u8], i: usize) -> Option<usize> {
+    let last = bytes.len().min(i + MAX_FRAME);
+    (i + MIN_FRAME..=last).find(|&j| crc16(&bytes[i..j]) == 0)
+}
+
+/// The first frame that begins after `i`. With this many places to look at, a CRC alone would match
+/// by chance too often, so the frame must also have the length its function asks for.
+fn next_frame(bytes: &[u8], i: usize) -> Option<usize> {
+    (i + 1..(bytes.len() + 1).saturating_sub(MIN_FRAME)).find(|&k| {
+        let (addr, fc) = (bytes[k], bytes[k + 1]);
+        addr <= MAX_ADDRESS
+            && function_name(fc).is_some()
+            && frame_end(bytes, k).is_some_and(|end| {
+                // Address, function and CRC only, or fields known for the function.
+                let (_, fields) = parse(&bytes[k..end]);
+                match fc {
+                    7 | 11 | 12 | 17 => end - k == MIN_FRAME,
+                    _ => fields.iter().any(|f| {
+                        use Kind::*;
+                        matches!(
+                            f.kind,
+                            ModbusException | ModbusByteCount | ModbusRegister | ModbusQuantity
+                        )
+                    }),
+                }
+            })
+    })
+}
+
 /// Split a block of characters (delimited by silence) into frames: the whole block if its CRC is
-/// valid, otherwise the shortest prefix with a valid CRC followed by the split of the rest. What is
-/// left without a valid CRC becomes one frame with a bad CRC.
+/// valid, otherwise the shortest prefix with a valid CRC followed by the split of the rest. Characters
+/// without a valid CRC become one frame with a bad CRC, up to the next frame that is recognised.
 pub fn split(bytes: &[u8]) -> Vec<(Range<usize>, bool)> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        let rest = &bytes[i..];
-        if rest.len() >= MIN_FRAME && crc16(rest) == 0 {
-            out.push((i..bytes.len(), true));
-            break;
-        }
-        match (i + MIN_FRAME..bytes.len()).find(|&j| crc16(&bytes[i..j]) == 0) {
-            Some(j) => {
-                out.push((i..j, true));
-                i = j;
-            }
-            None => {
-                out.push((i..bytes.len(), false));
-                break;
-            }
-        }
+        let rest = bytes.len() - i;
+        let whole = (MIN_FRAME..=MAX_FRAME).contains(&rest) && crc16(&bytes[i..]) == 0;
+        let good = if whole {
+            Some(bytes.len())
+        } else {
+            frame_end(bytes, i)
+        };
+        let end = good.or_else(|| next_frame(bytes, i)).unwrap_or(bytes.len());
+        out.push((i..end, good.is_some()));
+        i = end;
     }
     out
 }
@@ -272,12 +303,36 @@ impl ModbusRtu {
         }
     }
 
+    /// The line paused: everything collected is complete.
     fn finish(&mut self, out: &mut Vec<Annotation>) {
-        if self.chars.is_empty() {
-            return;
+        let bytes = self.bytes();
+        self.emit(&bytes, split(&bytes), out);
+        self.chars.clear();
+    }
+
+    /// The block is full without a pause: the frame at its end may still be incomplete and stays.
+    fn overflow(&mut self, out: &mut Vec<Annotation>) {
+        let bytes = self.bytes();
+        let mut frames = split(&bytes);
+        let mut keep = bytes.len();
+        if let Some((tail, false)) = frames.last().cloned() {
+            frames.pop();
+            keep = tail.start.max(bytes.len() - (MAX_FRAME - 1));
+            if tail.start < keep {
+                // Too long to be one frame.
+                frames.push((tail.start..keep, false));
+            }
         }
-        let bytes: Vec<u8> = self.chars.iter().map(|c| c.value as u8).collect();
-        for (range, crc_ok) in split(&bytes) {
+        self.emit(&bytes, frames, out);
+        self.chars.drain(..keep);
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        self.chars.iter().map(|c| c.value as u8).collect()
+    }
+
+    fn emit(&self, bytes: &[u8], frames: Vec<(Range<usize>, bool)>, out: &mut Vec<Annotation>) {
+        for (range, crc_ok) in frames {
             let chars = &self.chars[range.clone()];
             let frame = &bytes[range];
             let char_errors = chars.iter().fold(0, |f, c| f | c.flags) & flag::ERROR;
@@ -315,7 +370,6 @@ impl ModbusRtu {
                 });
             }
         }
-        self.chars.clear();
     }
 }
 
@@ -339,9 +393,11 @@ impl ByteLayer for ModbusRtu {
             .chars
             .last()
             .is_some_and(|l| c.start.saturating_sub(l.end) >= self.t35)
-            || self.chars.len() >= MAX_FRAME
         {
             self.finish(out);
+        }
+        if self.chars.len() >= MAX_BLOCK {
+            self.overflow(out);
         }
         self.chars.push(*c);
     }
@@ -480,6 +536,50 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_after_a_cut_off_or_disturbed_one_is_found() {
+        let resp = with_crc(&[0x65, 0x03, 0x02, 0x00, 0x2A]);
+        // Every possible cut through the first frame.
+        for cut in 1..READ_REQ.len() {
+            let mut block = READ_REQ[cut..].to_vec();
+            let n = block.len();
+            block.extend_from_slice(&resp);
+            block.extend_from_slice(&READ_REQ);
+            assert_eq!(
+                split(&block),
+                vec![(0..n, false), (n..n + 7, true), (n + 7..n + 15, true)],
+                "cut {cut}"
+            );
+        }
+        // A disturbed frame between good ones.
+        let mut block = READ_REQ.to_vec();
+        block.extend_from_slice(&resp);
+        block[8 + 3] ^= 0x40;
+        block.extend_from_slice(&READ_REQ);
+        assert_eq!(
+            split(&block),
+            vec![(0..8, true), (8..15, false), (15..23, true)]
+        );
+    }
+
+    #[test]
+    fn noise_is_not_taken_for_frames() {
+        let mut x = 0x2545_F491_4F6C_DD1Du64;
+        let mut found = 0;
+        for _ in 0..100 {
+            let noise: Vec<u8> = (0..200)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    (x >> 32) as u8
+                })
+                .collect();
+            found += next_frame(&noise, 0).is_some() as u32;
+        }
+        assert!(found <= 1, "{found} frames in noise");
+    }
+
+    #[test]
     fn labels() {
         let a = |kind, value, bits, flags| Annotation {
             start: 0,
@@ -591,6 +691,39 @@ mod tests {
         assert_eq!(frames.len(), 2, "{frames:?}");
         assert!(frames.iter().all(|f| f.flags == 0));
         assert_eq!((frames[0].bits, frames[1].bits), (REQUEST, RESPONSE));
+    }
+
+    #[test]
+    fn a_capture_that_begins_inside_a_telegram_gets_in_step() {
+        let c = cfg(115_200.0);
+        let char_samples = RATE / 115_200.0 * 11.0;
+        let mut w = Wave::new(RATE, 2_000_000, 1);
+        // Longer than a block, with pauses far below 1.75 ms.
+        let mut body = vec![0x65, 0x03, 40];
+        body.extend(0..40u8);
+        let resp = with_crc(&body);
+        let (mut starts, mut t) = (Vec::new(), 100);
+        for _ in 0..20 {
+            for f in [&READ_REQ[..], &resp] {
+                starts.push(t);
+                t = w.uart(0, t, &c, f) + (2.0 * char_samples) as u64;
+            }
+        }
+        assert!((t as usize) < w.samples.len());
+        w.samples.truncate(t as usize + (0.003 * RATE) as usize);
+        for from in (100..starts[2]).step_by(37) {
+            let mut s = CaptureStore::new(StoreConfig::new(ChannelCount::new(8).unwrap(), RATE));
+            s.push_samples(&w.samples[from as usize..]);
+            let a = decode_all(Box::new(Uart::new(c.clone())), &s);
+            let frames = lane(&a, 1);
+            assert!(frames.windows(2).all(|p| p[0].end <= p[1].start));
+            let good = frames
+                .iter()
+                .filter(|f| f.flags & flag::CHECKSUM == 0)
+                .count();
+            let whole = starts.iter().filter(|s| **s > from).count();
+            assert_eq!(good, whole, "from {from}: {frames:?}");
+        }
     }
 
     #[test]
