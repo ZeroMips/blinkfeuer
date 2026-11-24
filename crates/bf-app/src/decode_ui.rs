@@ -1132,6 +1132,60 @@ pub struct TableState {
     /// Jump to the next (+1) or previous (-1) row after the selection on the next frame.
     pub nav: Option<i32>,
     pub focus_search: bool,
+    columns: Columns,
+}
+
+type ColumnsKey = (u32, usize, Format);
+
+/// Widths of the table's columns except the last, which takes the rest. They fit the rows seen so far
+/// and never shrink while the same lane is shown, so that scrolling does not make them jump.
+#[derive(Default)]
+struct Columns {
+    /// Decoder, lane and format the widths are for.
+    key: Option<ColumnsKey>,
+    widths: [f32; 3],
+}
+
+impl Columns {
+    /// Space between columns.
+    const GAP: f32 = 16.0;
+    /// Wider texts are cut off.
+    const MAX: f32 = 420.0;
+
+    /// Start over with `min` widths if something else is shown than before.
+    fn show(&mut self, key: ColumnsKey, min: [f32; 3]) {
+        if self.key != Some(key) {
+            *self = Self {
+                key: Some(key),
+                widths: min,
+            };
+        }
+    }
+
+    /// Make room for a text of this width in column `i`.
+    fn fit(&mut self, i: usize, width: f32) {
+        if let Some(w) = self.widths.get_mut(i) {
+            *w = w.max(width.ceil() + Self::GAP).min(Self::MAX);
+        }
+    }
+
+    /// Left and right edge of the text in column `i` of a row `total` wide.
+    fn span(&self, i: usize, total: f32) -> (f32, f32) {
+        let left = 4.0 + self.widths[..i.min(3)].iter().sum::<f32>();
+        match self.widths.get(i) {
+            // Half the gap stays free of text that is cut off.
+            Some(w) => (left, left + w - Self::GAP / 2.0),
+            None => (left, total.max(left)),
+        }
+    }
+
+    fn cell(&self, i: usize, row: Rect) -> Rect {
+        let (left, right) = self.span(i, row.width());
+        Rect::from_min_max(
+            row.left_top() + vec2(left, 0.0),
+            egui::pos2(row.left() + right, row.bottom()),
+        )
+    }
 }
 
 const ROW_H: f32 = 16.0;
@@ -1275,31 +1329,30 @@ pub fn table_ui(
     }
 
     // ---- header
-    let cols: [(f32, &str); 4] = if is_telegram_lane {
-        [
-            (0.0, "Start"),
-            (200.0, "Duration"),
-            (290.0, "Bytes"),
-            (360.0, "Text"),
-        ]
+    let titles = if is_telegram_lane {
+        ["Start", "Duration", "Bytes", "Text"]
     } else {
-        [
-            (0.0, "Start"),
-            (200.0, "Duration"),
-            (290.0, "Value"),
-            (400.0, "Info"),
-        ]
+        ["Start", "Duration", "Value", "Info"]
     };
-    let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-    for (x, t) in cols {
-        ui.painter().text(
-            head.left_center() + vec2(x + 4.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            t,
-            egui::FontId::monospace(11.0),
-            theme::TEXT_DIM,
-        );
+    let min = [140.0, 90.0, if is_telegram_lane { 70.0 } else { 110.0 }];
+    let font = egui::FontId::monospace(11.0);
+    let start_text = |row: usize| {
+        let start = lane[ann_index(row)].start;
+        format_split((start as f64 - origin) / rate, 1.0 / rate)
+    };
+    let cols = &mut st.columns;
+    cols.show((entry.handle.id.0, st.lane, fmt), min);
+    // The last row has the longest time, or (before the trigger) the first one.
+    if total > 0 {
+        for row in [0, total - 1] {
+            let g = ui
+                .painter()
+                .layout_no_wrap(start_text(row), font.clone(), theme::TEXT);
+            cols.fit(0, g.size().x);
+        }
     }
+    // Drawn after the rows, which determine the widths.
+    let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
 
     ui.painter().line_segment(
         [head.left_bottom(), head.right_bottom()],
@@ -1318,8 +1371,45 @@ pub fn table_ui(
         area = area.vertical_scroll_offset((row.saturating_sub(3)) as f32 * ROW_H);
     }
     area.show_rows(ui, ROW_H, total, |ui, range| {
+        let mut rows = Vec::with_capacity(range.len());
         for row in range {
             let i = ann_index(row);
+            let a = &lane[i];
+            let color = if a.is_error() {
+                theme::DEC_ERR
+            } else {
+                theme::TEXT
+            };
+            let (third, fourth) = if is_telegram_lane {
+                let text = bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), fmt, 400);
+                (a.value.to_string(), (text, color))
+            } else {
+                let info_color = if a.flags == 0 && a.kind != Kind::Address {
+                    theme::TEXT_DIM
+                } else {
+                    theme::DEC_WARN
+                };
+                (a.label(fmt), (info_with_bytes(a, chars), info_color))
+            };
+            let third_color = if is_telegram_lane {
+                theme::TEXT_DIM
+            } else {
+                color
+            };
+            let duration = crate::view::format_duration((a.end - a.start) as f64 / rate);
+            let cells = [
+                (start_text(row), theme::TEXT),
+                (duration, theme::TEXT_DIM),
+                (third, third_color),
+                fourth,
+            ]
+            .map(|(text, color)| ui.painter().layout_no_wrap(text, font.clone(), color));
+            for (c, g) in cells.iter().enumerate() {
+                cols.fit(c, g.size().x);
+            }
+            rows.push((i, cells));
+        }
+        for (i, cells) in rows {
             let a = &lane[i];
             let is_sel = selected.is_some_and(|s| {
                 s.id == entry.handle.id.0 && s.lane as usize == st.lane && s.start == a.start
@@ -1332,53 +1422,12 @@ pub fn table_ui(
                 ui.painter()
                     .rect_filled(rect, 0.0, Color32::from_white_alpha(0x10));
             }
-            let color = if a.is_error() {
-                theme::DEC_ERR
-            } else {
-                theme::TEXT
-            };
-            let font = egui::FontId::monospace(11.0);
-            let (third, fourth) = if is_telegram_lane {
-                let text = bf_decode::telegram_text(bf_decode::telegram_chars(chars, a), fmt, 400);
-                (a.value.to_string(), (text, color))
-            } else {
-                let info_color = if a.flags == 0 && a.kind != Kind::Address {
-                    theme::TEXT_DIM
-                } else {
-                    theme::DEC_WARN
-                };
-                (a.label(fmt), (info_with_bytes(a, chars), info_color))
-            };
-            let cells: [(f32, String, Color32); 4] = [
-                (
-                    cols[0].0,
-                    format_split((a.start as f64 - origin) / rate, 1.0 / rate),
-                    theme::TEXT,
-                ),
-                (
-                    cols[1].0,
-                    crate::view::format_duration((a.end - a.start) as f64 / rate),
-                    theme::TEXT_DIM,
-                ),
-                (
-                    cols[2].0,
-                    third,
-                    if is_telegram_lane {
-                        theme::TEXT_DIM
-                    } else {
-                        color
-                    },
-                ),
-                (cols[3].0, fourth.0, fourth.1),
-            ];
-            for (x, text, col) in cells {
-                ui.painter().with_clip_rect(rect).text(
-                    rect.left_center() + vec2(x + 4.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    text,
-                    font.clone(),
-                    col,
-                );
+            for (c, g) in cells.into_iter().enumerate() {
+                let cell = cols.cell(c, rect);
+                let at = egui::pos2(cell.left(), rect.center().y - g.size().y / 2.0);
+                ui.painter()
+                    .with_clip_rect(cell.intersect(ui.clip_rect()))
+                    .galley(at, g, theme::TEXT);
             }
             if resp.clicked() {
                 picked = Some((
@@ -1393,6 +1442,16 @@ pub fn table_ui(
             }
         }
     });
+    for (c, title) in titles.into_iter().enumerate() {
+        let cell = cols.cell(c, head);
+        ui.painter().with_clip_rect(cell).text(
+            cell.left_center(),
+            egui::Align2::LEFT_CENTER,
+            title,
+            egui::FontId::monospace(11.0),
+            theme::TEXT_DIM,
+        );
+    }
     picked
 }
 
@@ -1493,6 +1552,27 @@ mod tests {
             bits: 8,
             flags,
         }
+    }
+
+    #[test]
+    fn table_columns_do_not_overlap() {
+        let mut c = Columns::default();
+        c.show((1, 0, Format::Hex), [140.0, 90.0, 110.0]);
+        for (i, w) in [(0, 230.0), (1, 60.0), (2, 9_000.0), (3, 9_000.0)] {
+            c.fit(i, w);
+        }
+        // Wide enough for the text, up to the limit.
+        let (l, r) = c.span(0, 800.0);
+        assert!(r - l >= 230.0);
+        assert!(c.widths[2] <= Columns::MAX);
+        for i in 0..3 {
+            assert!(c.span(i, 800.0).1 < c.span(i + 1, 800.0).0);
+        }
+        // Narrower rows do not shrink them, another lane does.
+        c.fit(0, 10.0);
+        assert!(c.widths[0] > 230.0);
+        c.show((1, 1, Format::Hex), [140.0, 90.0, 110.0]);
+        assert_eq!(c.widths, [140.0, 90.0, 110.0]);
     }
 
     #[test]
