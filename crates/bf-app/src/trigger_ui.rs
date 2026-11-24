@@ -58,6 +58,9 @@ fn span_ui(ui: &mut egui::Ui, id: &str, span: &mut Span) {
 }
 
 /// The Trigger window. Returns the id of a decoder whose settings the user wants to edit.
+///
+/// With room for it the window has two columns: what to trigger on on the left; the example, how
+/// much to record and the warnings on the right.
 #[allow(clippy::too_many_arguments)]
 pub fn contents(
     ui: &mut egui::Ui,
@@ -71,6 +74,42 @@ pub fn contents(
     continuous: bool,
 ) -> Option<u32> {
     let mut edit = None;
+    // What the trigger will really use: linked decoders' settings put in.
+    let configs: Vec<(u32, Config)> = decoders.iter().map(|d| (d.id, d.cfg.clone())).collect();
+    if ui.available_width() >= TWO_COLUMNS {
+        ui.columns(2, |cols| {
+            let (left, right) = cols.split_at_mut(1);
+            what_to_look_for(&mut left[0], t, probe, names, decoders, n, &mut edit);
+            let protocol = t.protocol.resolved(&configs);
+            let right = &mut right[0];
+            if example(right, &protocol, t.mode, names) {
+                right.separator();
+            }
+            how_much_to_record(right, t, &protocol, memory_mib, n, rate, continuous);
+        });
+    } else {
+        what_to_look_for(ui, t, probe, names, decoders, n, &mut edit);
+        let protocol = t.protocol.resolved(&configs);
+        example(ui, &protocol, t.mode, names);
+        ui.separator();
+        how_much_to_record(ui, t, &protocol, memory_mib, n, rate, continuous);
+    }
+    edit
+}
+
+/// Below this width the window has one column.
+const TWO_COLUMNS: f32 = 820.0;
+
+/// Enabling, the mode and its settings.
+fn what_to_look_for(
+    ui: &mut egui::Ui,
+    t: &mut TriggerSetup,
+    probe: &mut BaudProbe,
+    names: &[String],
+    decoders: &[DecoderChoice],
+    n: usize,
+    edit: &mut Option<u32>,
+) {
     ui.checkbox(
         &mut t.enabled,
         "Wait for the trigger before the capture ends",
@@ -84,15 +123,22 @@ pub fn contents(
     ui.separator();
     match t.mode {
         TriggerMode::Pattern => pattern(ui, t, names, n),
-        TriggerMode::Uart => uart(ui, t, probe, names, decoders, &mut edit),
-        TriggerMode::Spi => spi(ui, t, names, decoders, &mut edit),
-        TriggerMode::I2c => i2c(ui, t, names, decoders, &mut edit),
+        TriggerMode::Uart => uart(ui, t, probe, names, decoders, edit),
+        TriggerMode::Spi => spi(ui, t, names, decoders, edit),
+        TriggerMode::I2c => i2c(ui, t, names, decoders, edit),
     }
-    // What the trigger will really use: linked decoders' settings put in.
-    let configs: Vec<(u32, Config)> = decoders.iter().map(|d| (d.id, d.cfg.clone())).collect();
-    let protocol = t.protocol.resolved(&configs);
-    example(ui, &protocol, t.mode, names);
-    ui.separator();
+}
+
+/// Pre- and post-trigger spans, the memory limit, and what keeps the trigger from working.
+fn how_much_to_record(
+    ui: &mut egui::Ui,
+    t: &mut TriggerSetup,
+    protocol: &ProtocolSetup,
+    memory_mib: &mut u64,
+    n: usize,
+    rate: f64,
+    continuous: bool,
+) {
     ui.label(
         RichText::new("How much to record")
             .color(theme::TEXT)
@@ -174,16 +220,21 @@ pub fn contents(
             );
         }
     }
-    edit
 }
 
 /// For a protocol trigger: an example of what it looks for, with the trigger sample marked.
-fn example(ui: &mut egui::Ui, protocol: &ProtocolSetup, mode: TriggerMode, names: &[String]) {
+/// True when an example was drawn.
+fn example(
+    ui: &mut egui::Ui,
+    protocol: &ProtocolSetup,
+    mode: TriggerMode,
+    names: &[String],
+) -> bool {
     let Ok(Some(trigger)) = protocol.build(mode) else {
-        return;
+        return false;
     };
     let Some(p) = crate::decode_preview::build_trigger(&trigger, protocol.trigger_at, names) else {
-        return;
+        return false;
     };
     let fmt = match trigger {
         ProtocolTrigger::Uart(..) if protocol.uart_ascii => Format::Ascii,
@@ -196,6 +247,7 @@ fn example(ui: &mut egui::Ui, protocol: &ProtocolSetup, mode: TriggerMode, names
     for line in &p.caption {
         ui.label(RichText::new(line).color(theme::TEXT_DIM).size(11.0));
     }
+    true
 }
 
 /// The decoder settings of a protocol trigger: its own (editable), or those of a decoder of the same

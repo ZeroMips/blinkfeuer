@@ -2417,7 +2417,9 @@ impl App {
         egui::Window::new("Trigger")
             .open(&mut open)
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
+            .default_width(1000.0)
+            .vscroll(true)
             .show(ctx, |ui| {
                 edit = crate::trigger_ui::contents(
                     ui,
@@ -2490,7 +2492,7 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_size([940.0, 660.0])
+            .default_size([1240.0, 700.0])
             .min_size([640.0, 420.0])
             .show(ctx, |ui| {
                 let actions =

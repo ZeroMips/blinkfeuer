@@ -663,131 +663,225 @@ pub fn setup_ui(
     let height = ui.available_height().max(300.0);
     ui.horizontal_top(|ui| {
         // ---- left: the list
-        ui.allocate_ui_with_layout(vec2(210.0, height), egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.set_min_size(vec2(210.0, height));
-            ui.label(RichText::new("Decoders").color(theme::TEXT_DIM));
-            egui::ScrollArea::vertical().max_height(height - 110.0).auto_shrink([false, false]).show(ui, |ui| {
-                if entries.is_empty() {
-                    ui.label(RichText::new("none yet").color(theme::TEXT_DIM));
-                }
-                for (i, e) in entries.iter().enumerate() {
-                    let sel = st.selected == i;
-                    let bad = validate(&e.cfg).is_some();
-                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
-                    let bg = if sel {
-                        theme::SELECT
-                    } else if resp.hovered() {
-                        Color32::from_white_alpha(0x10)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    ui.painter().rect_filled(rect, 0.0, bg);
-                    ui.painter().rect_filled(Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())), 0.0, kind_color(e.cfg.kind()));
-                    ui.painter().text(rect.left_top() + vec2(12.0, 8.0), egui::Align2::LEFT_CENTER, &e.name, egui::FontId::monospace(12.0), theme::TEXT);
-                    let done = (e.handle.decoded_to() as f64 / end.max(1) as f64 * 100.0).min(100.0);
-                    let status = if bad { "check settings".to_string() } else { format!("{} items, {done:.0}%", e.handle.anns.read().len()) };
-                    ui.painter().text(
-                        rect.left_top() + vec2(12.0, 26.0),
-                        egui::Align2::LEFT_CENTER,
-                        format!("{}  {status}", e.cfg.kind().label()),
-                        egui::FontId::monospace(10.0),
-                        if bad { theme::DEC_ERR } else { theme::TEXT_DIM },
-                    );
-                    if resp.clicked() {
-                        st.selected = i;
+        ui.allocate_ui_with_layout(
+            vec2(210.0, height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_min_size(vec2(210.0, height));
+                ui.label(RichText::new("Decoders").color(theme::TEXT_DIM));
+                egui::ScrollArea::vertical()
+                    .max_height(height - 110.0)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if entries.is_empty() {
+                            ui.label(RichText::new("none yet").color(theme::TEXT_DIM));
+                        }
+                        for (i, e) in entries.iter().enumerate() {
+                            let sel = st.selected == i;
+                            let bad = validate(&e.cfg).is_some();
+                            let (rect, resp) = ui.allocate_exact_size(
+                                vec2(ui.available_width(), 38.0),
+                                Sense::click(),
+                            );
+                            let bg = if sel {
+                                theme::SELECT
+                            } else if resp.hovered() {
+                                Color32::from_white_alpha(0x10)
+                            } else {
+                                Color32::TRANSPARENT
+                            };
+                            ui.painter().rect_filled(rect, 0.0, bg);
+                            ui.painter().rect_filled(
+                                Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())),
+                                0.0,
+                                kind_color(e.cfg.kind()),
+                            );
+                            ui.painter().text(
+                                rect.left_top() + vec2(12.0, 8.0),
+                                egui::Align2::LEFT_CENTER,
+                                &e.name,
+                                egui::FontId::monospace(12.0),
+                                theme::TEXT,
+                            );
+                            let done = (e.handle.decoded_to() as f64 / end.max(1) as f64 * 100.0)
+                                .min(100.0);
+                            let status = if bad {
+                                "check settings".to_string()
+                            } else {
+                                format!("{} items, {done:.0}%", e.handle.anns.read().len())
+                            };
+                            ui.painter().text(
+                                rect.left_top() + vec2(12.0, 26.0),
+                                egui::Align2::LEFT_CENTER,
+                                format!("{}  {status}", e.cfg.kind().label()),
+                                egui::FontId::monospace(10.0),
+                                if bad { theme::DEC_ERR } else { theme::TEXT_DIM },
+                            );
+                            if resp.clicked() {
+                                st.selected = i;
+                            }
+                        }
+                    });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(RichText::new("Add decoder").color(theme::TEXT_DIM));
+                ui.horizontal(|ui| {
+                    for k in DecoderKind::ALL {
+                        if ui
+                            .button(format!("+ {}", k.label()))
+                            .on_hover_text(KIND_BLURB.iter().find(|b| b.0 == k).map_or("", |b| b.1))
+                            .clicked()
+                        {
+                            actions.push(Action::Add(k));
+                        }
                     }
-                }
-            });
-            ui.add_space(6.0);
-            ui.separator();
-            ui.label(RichText::new("Add decoder").color(theme::TEXT_DIM));
-            ui.horizontal(|ui| {
-                for k in DecoderKind::ALL {
-                    if ui.button(format!("+ {}", k.label())).on_hover_text(KIND_BLURB.iter().find(|b| b.0 == k).map_or("", |b| b.1)).clicked() {
-                        actions.push(Action::Add(k));
-                    }
-                }
-            });
-        });
+                });
+            },
+        );
         ui.separator();
 
         // ---- right: settings and example
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), height), egui::Layout::top_down(egui::Align::Min), |ui| {
-            if entries.is_empty() {
-                ui.add_space(30.0);
-                ui.label(RichText::new("Add a decoder on the left.").size(15.0));
-                ui.add_space(10.0);
-                for (k, text) in KIND_BLURB {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{:<5}", k.label())).color(kind_color(k)).strong());
-                        ui.label(text);
-                    });
-                }
-                return;
-            }
-            let i = st.selected;
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                let e = &mut entries[i];
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(e.cfg.kind().label()).color(Color32::BLACK).background_color(kind_color(e.cfg.kind())).strong());
-                    ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(160.0)).on_hover_text(help::NAME);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Remove decoder").clicked() {
-                            actions.push(Action::Remove(i));
-                        }
-                    });
-                });
-                section(ui, "Display", |ui| {
-                    grid(ui, "disp", |ui| {
-                        param(ui, "Show values as", help::FORMAT, |ui| {
-                            let mut ch = false;
-                            let mut r = egui::ComboBox::from_id_salt("fmt").selected_text(e.format.label()).width(100.0).show_ui(ui, |ui| {
-                                for f in Format::ALL {
-                                    ch |= ui.selectable_value(&mut e.format, f, f.label()).changed();
-                                }
-                            }).response;
-                            if ch {
-                                r.mark_changed();
-                            }
-                            r
+        ui.allocate_ui_with_layout(
+            vec2(ui.available_width(), height),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                if entries.is_empty() {
+                    ui.add_space(30.0);
+                    ui.label(RichText::new("Add a decoder on the left.").size(15.0));
+                    ui.add_space(10.0);
+                    for (k, text) in KIND_BLURB {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("{:<5}", k.label()))
+                                    .color(kind_color(k))
+                                    .strong(),
+                            );
+                            ui.label(text);
                         });
-                    });
-                });
-                if lf_only_for_ascii(&mut e.cfg, e.format) {
-                    actions.push(Action::Rebuild(i));
-                }
-                let mut cfg = e.cfg.clone();
-                if config_ui_with(ui, &format!("d{}", e.handle.id.0), &mut cfg, names, Some(e.format), Some(&mut st.probe)) {
-                    e.cfg = cfg;
-                    actions.push(Action::Rebuild(i));
-                }
-                if let Some(msg) = validate(&e.cfg) {
-                    ui.add_space(6.0);
-                    ui.colored_label(theme::DEC_ERR, format!("! {msg}"));
-                }
-
-                section(ui, "Example: what the decoder expects", |ui| {
-                    let stale = st.cache.as_ref().is_none_or(|(c, n, _)| *c != e.cfg || n != names);
-                    if stale {
-                        st.cache = Some((e.cfg.clone(), names.to_vec(), crate::decode_preview::build(&e.cfg, names)));
                     }
-                    if let Some((_, _, p)) = &st.cache {
-                        if validate(&e.cfg).is_some_and(|_| matches!(e.cfg, Config::I2c(_))) {
-                            ui.label(RichText::new("Give SCL and SDA different channels to see the example.").color(theme::TEXT_DIM));
+                    return;
+                }
+                let i = st.selected;
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let e = &mut entries[i];
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(e.cfg.kind().label())
+                                    .color(Color32::BLACK)
+                                    .background_color(kind_color(e.cfg.kind()))
+                                    .strong(),
+                            );
+                            ui.add(egui::TextEdit::singleline(&mut e.name).desired_width(160.0))
+                                .on_hover_text(help::NAME);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("Remove decoder").clicked() {
+                                        actions.push(Action::Remove(i));
+                                    }
+                                },
+                            );
+                        });
+                        if ui.available_width() >= 820.0 {
+                            // Settings on the left, the example next to them.
+                            ui.columns(2, |cols| {
+                                let (left, right) = cols.split_at_mut(1);
+                                decoder_settings(&mut left[0], e, i, st, names, &mut actions);
+                                decoder_example(&mut right[0], e, st, names);
+                            });
                         } else {
-                            crate::decode_preview::draw(ui, p, e.format);
-                            ui.add_space(4.0);
-                            for line in &p.caption {
-                                ui.label(RichText::new(line).color(theme::TEXT_DIM).size(11.0));
-                            }
-                            ui.label(RichText::new("Dots mark where the decoder samples; the lane below shows what it decodes.").color(theme::TEXT_DIM).size(11.0));
+                            decoder_settings(ui, e, i, st, names, &mut actions);
+                            decoder_example(ui, e, st, names);
                         }
-                    }
-                });
+                    });
+            },
+        );
+    });
+    actions
+}
+
+/// Display format and decoder settings of entry `i`.
+fn decoder_settings(
+    ui: &mut egui::Ui,
+    e: &mut Entry,
+    i: usize,
+    st: &mut SetupState,
+    names: &[String],
+    actions: &mut Vec<Action>,
+) {
+    section(ui, "Display", |ui| {
+        grid(ui, "disp", |ui| {
+            param(ui, "Show values as", help::FORMAT, |ui| {
+                let mut ch = false;
+                let mut r = egui::ComboBox::from_id_salt("fmt")
+                    .selected_text(e.format.label())
+                    .width(100.0)
+                    .show_ui(ui, |ui| {
+                        for f in Format::ALL {
+                            ch |= ui.selectable_value(&mut e.format, f, f.label()).changed();
+                        }
+                    })
+                    .response;
+                if ch {
+                    r.mark_changed();
+                }
+                r
             });
         });
     });
-    actions
+    if lf_only_for_ascii(&mut e.cfg, e.format) {
+        actions.push(Action::Rebuild(i));
+    }
+    let mut cfg = e.cfg.clone();
+    if config_ui_with(
+        ui,
+        &format!("d{}", e.handle.id.0),
+        &mut cfg,
+        names,
+        Some(e.format),
+        Some(&mut st.probe),
+    ) {
+        e.cfg = cfg;
+        actions.push(Action::Rebuild(i));
+    }
+    if let Some(msg) = validate(&e.cfg) {
+        ui.add_space(6.0);
+        ui.colored_label(theme::DEC_ERR, format!("! {msg}"));
+    }
+}
+
+/// The example traces for an entry's settings (built again when they change).
+fn decoder_example(ui: &mut egui::Ui, e: &Entry, st: &mut SetupState, names: &[String]) {
+    section(ui, "Example: what the decoder expects", |ui| {
+        let stale = st
+            .cache
+            .as_ref()
+            .is_none_or(|(c, n, _)| *c != e.cfg || n != names);
+        if stale {
+            st.cache = Some((
+                e.cfg.clone(),
+                names.to_vec(),
+                crate::decode_preview::build(&e.cfg, names),
+            ));
+        }
+        if let Some((_, _, p)) = &st.cache {
+            if validate(&e.cfg).is_some_and(|_| matches!(e.cfg, Config::I2c(_))) {
+                ui.label(
+                    RichText::new("Give SCL and SDA different channels to see the example.")
+                        .color(theme::TEXT_DIM),
+                );
+            } else {
+                crate::decode_preview::draw(ui, p, e.format);
+                ui.add_space(4.0);
+                for line in &p.caption {
+                    ui.label(RichText::new(line).color(theme::TEXT_DIM).size(11.0));
+                }
+                ui.label(RichText::new("Dots mark where the decoder samples; the lane below shows what it decodes.").color(theme::TEXT_DIM).size(11.0));
+            }
+        }
+    });
 }
 
 /// The annotation the user picked, in the table or in the waveform.
