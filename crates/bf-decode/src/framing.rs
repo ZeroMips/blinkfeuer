@@ -15,6 +15,9 @@
 //!
 //! A wrong baud rate can still decode a few characters cleanly by chance. Real UART edges inside a
 //! character fall on bit boundaries, so a format only fits when (nearly) all of them do.
+//!
+//! A capture that begins inside a message is decoded out of step until the line pauses, so the
+//! characters before the first pause do not count.
 
 use crate::engine::decode_all;
 use crate::uart::{Parity, Uart, UartConfig};
@@ -84,7 +87,37 @@ impl Trial {
     }
 }
 
-fn trial(store: &CaptureStore, base: &UartConfig, data_bits: u8, parity: Parity) -> Trial {
+/// The longest frame in bit times (start, 9 data bits, parity, 2 stop bits): after a pause this long
+/// a decoder is in step whatever its frame format.
+const LONGEST_FRAME: f64 = 13.0;
+
+/// Where the first character after a pause begins; `None` if the line never pauses.
+fn first_in_step(store: &CaptureStore, base: &UartConfig) -> Option<u64> {
+    let pause = LONGEST_FRAME * store.sample_rate() / base.baud.max(1.0);
+    let range = store.range();
+    // Since when the line has been idle.
+    let mut idle_since = (store.level(base.rx, range.start)? != base.invert).then_some(range.start);
+    let mut found = None;
+    store.toggles(base.rx, range, |p, level| {
+        if level != base.invert {
+            idle_since = Some(p);
+        } else if let Some(since) = idle_since.take() {
+            if found.is_none() && (p - since) as f64 >= pause {
+                found = Some(p);
+            }
+        }
+    });
+    found
+}
+
+/// Decode with one candidate format; only characters from sample `from` on count.
+fn trial(
+    store: &CaptureStore,
+    base: &UartConfig,
+    data_bits: u8,
+    parity: Parity,
+    from: u64,
+) -> Trial {
     let cfg = UartConfig {
         data_bits,
         parity,
@@ -104,7 +137,10 @@ fn trial(store: &CaptureStore, base: &UartConfig, data_bits: u8, parity: Parity)
         misaligned: 0,
     };
     let bit = store.sample_rate() / base.baud.max(1.0);
-    for a in anns.iter().filter(|a| a.lane == 0 && a.kind == Kind::Data) {
+    for a in anns
+        .iter()
+        .filter(|a| a.lane == 0 && a.kind == Kind::Data && a.start >= from)
+    {
         t.chars += 1;
         t.framing += (a.flags & crate::flag::FRAMING != 0) as usize;
         t.parity_errors += (a.flags & crate::flag::PARITY != 0) as usize;
@@ -120,13 +156,21 @@ fn trial(store: &CaptureStore, base: &UartConfig, data_bits: u8, parity: Parity)
 /// Detect the frame format of the UART described by `base` (channel, baud rate, polarity and bit
 /// order are taken from it; its frame format is ignored).
 pub fn detect_format(store: &CaptureStore, base: &UartConfig) -> Result<FormatGuess, String> {
-    let mut trials = Vec::new();
-    for data_bits in [5u8, 6, 7, 8, 9] {
-        for parity in [Parity::None, Parity::Even, Parity::Odd] {
-            trials.push(trial(store, base, data_bits, parity));
+    let try_all = |from: u64| {
+        let mut trials = Vec::new();
+        for data_bits in [5u8, 6, 7, 8, 9] {
+            for parity in [Parity::None, Parity::Even, Parity::Odd] {
+                trials.push(trial(store, base, data_bits, parity, from));
+            }
         }
+        let most = trials.iter().map(|t| t.chars).max().unwrap_or(0);
+        (trials, most)
+    };
+    let (mut trials, mut most) = try_all(first_in_step(store, base).unwrap_or(0));
+    if most < MIN_CHARS {
+        // Too little after the first pause: use everything.
+        (trials, most) = try_all(0);
     }
-    let most = trials.iter().map(|t| t.chars).max().unwrap_or(0);
     if most < MIN_CHARS {
         return Err(format!(
             "only {most} characters on this channel at {} baud: capture more traffic (or check the baud rate)",
@@ -202,7 +246,8 @@ mod tests {
     /// `n` characters in `fmt`, in bursts: back-to-back within a burst, idle between bursts.
     fn traffic(fmt: &UartConfig, data: &[u8]) -> CaptureStore {
         let mut w = Wave::new(RATE, 2_000_000, if fmt.invert { 0 } else { 1 });
-        let mut t = 1_000;
+        // Idle for longer than a frame, so that the first burst counts.
+        let mut t = 3_000;
         for burst in data.chunks(6) {
             t = w.uart(0, t, fmt, burst) + 3_000;
         }
@@ -252,6 +297,61 @@ mod tests {
             assert_eq!(g.errors, 0);
             assert_eq!(g.chars, 60);
         }
+    }
+
+    /// `detect` on the same traffic captured from sample `from` on.
+    fn detect_from(sent: &UartConfig, payload: &[u8], from: usize) -> Result<FormatGuess, String> {
+        let mut w = Wave::new(RATE, 2_000_000, if sent.invert { 0 } else { 1 });
+        let mut t = 0;
+        for burst in payload.chunks(27) {
+            // Two idle bits between characters (the generator's) and 200 between messages.
+            t = w.uart(0, t, sent, burst) + (200.0 * RATE / sent.baud) as u64;
+        }
+        let mut s = CaptureStore::new(StoreConfig::new(ChannelCount::new(8).unwrap(), RATE));
+        s.push_samples(&w.samples[from..]);
+        let base = UartConfig {
+            baud: sent.baud,
+            invert: sent.invert,
+            ..Default::default()
+        };
+        detect_format(&s, &base)
+    }
+
+    #[test]
+    fn a_capture_that_begins_inside_a_message_is_recognised() {
+        let bit = (RATE / 19_200.0) as usize;
+        for (parity, invert) in [
+            (Parity::None, false),
+            (Parity::Even, false),
+            (Parity::Even, true),
+        ] {
+            let sent = UartConfig {
+                invert,
+                ..fmt(8, parity, 1.0)
+            };
+            let name = if parity == Parity::None { "8N1" } else { "8E1" };
+            // Also from sample 0, where the line is already in the first start bit.
+            for k in 0..40 {
+                let g = detect_from(&sent, &data(8, 135), k * 7 * bit / 2).unwrap();
+                assert_eq!(
+                    (g.short().as_str(), g.errors),
+                    (name, 0),
+                    "offset {k}: {g:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn traffic_without_a_pause_still_counts() {
+        let sent = fmt(8, Parity::Even, 1.0);
+        let mut w = Wave::new(RATE, 100_000, 1);
+        // The line is idle for less than a frame before the characters and never again.
+        let end = w.uart(0, 500, &sent, &data(8, 60));
+        let mut s = CaptureStore::new(StoreConfig::new(ChannelCount::new(8).unwrap(), RATE));
+        s.push_samples(&w.samples[..end as usize]);
+        assert_eq!(first_in_step(&s, &sent), None);
+        assert_eq!(detect_format(&s, &sent).unwrap().short(), "8E1");
     }
 
     #[test]
