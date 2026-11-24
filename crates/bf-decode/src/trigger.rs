@@ -118,6 +118,44 @@ pub fn normalize(items: Vec<PatItem>) -> Vec<PatItem> {
     out
 }
 
+/// Finds the matches of a pattern in decoded items fed one at a time (the search of the annotation
+/// table uses the trigger patterns).
+#[derive(Clone, Debug)]
+pub struct PatternSearch {
+    items: Vec<PatItem>,
+    active: Vec<(usize, usize)>,
+}
+
+impl PatternSearch {
+    /// `None` if the pattern has nothing to look for (only gaps).
+    pub fn new(items: Vec<PatItem>) -> Option<Self> {
+        let items = normalize(items);
+        (!items.is_empty()).then_some(PatternSearch {
+            items,
+            active: Vec::new(),
+        })
+    }
+
+    /// Feed item number `index`: the index of the first item of the match it completes, if any.
+    /// Matches do not overlap: after one, the search starts afresh (like "find all").
+    pub fn feed(&mut self, index: usize, a: &Annotation) -> Option<usize> {
+        let hit = step_pattern(&self.items, &mut self.active, a, index);
+        if hit.is_some() {
+            self.active.clear();
+        }
+        hit
+    }
+
+    /// Whether `seq` contains a match (from a fresh start).
+    pub fn found_in(&self, seq: &[Annotation]) -> bool {
+        let mut s = PatternSearch {
+            items: self.items.clone(),
+            active: Vec::new(),
+        };
+        seq.iter().enumerate().any(|(i, a)| s.feed(i, a).is_some())
+    }
+}
+
 /// What to look for on a UART.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UartMatch {
@@ -317,7 +355,7 @@ impl DecoderTrigger {
             } else if m.items.is_empty() {
                 None
             } else {
-                step_pattern(&m.items, &mut m.active, &a)
+                step_pattern(&m.items, &mut m.active, &a, a.start)
             };
             if let (Some(b), None) = (begins, hit) {
                 hit = Some(match self.at {
@@ -330,12 +368,17 @@ impl DecoderTrigger {
     }
 }
 
-/// Feed item `c` to the partial matches of `items`: the start of a completed match (the latest one,
-/// i.e. the shortest match) if `c` completes one.
-fn step_pattern(items: &[PatItem], active: &mut Vec<(usize, u64)>, c: &Annotation) -> Option<u64> {
+/// Feed item `c` (which begins at `here`: a sample, or an index) to the partial matches of `items`:
+/// where a completed match began (the latest start, i.e. the shortest match) if `c` completes one.
+fn step_pattern<T: Copy + Ord>(
+    items: &[PatItem],
+    active: &mut Vec<(usize, T)>,
+    c: &Annotation,
+    here: T,
+) -> Option<T> {
     // Add state `i` (and, past a gap that may match nothing, the following ones), keeping the latest
     // start per position.
-    fn add(items: &[PatItem], next: &mut Vec<(usize, u64)>, i: usize, start: u64) {
+    fn add<T: Copy + Ord>(items: &[PatItem], next: &mut Vec<(usize, T)>, i: usize, start: T) {
         match next.iter_mut().find(|s| s.0 == i) {
             Some(s) => s.1 = s.1.max(start),
             None => next.push((i, start)),
@@ -345,14 +388,14 @@ fn step_pattern(items: &[PatItem], active: &mut Vec<(usize, u64)>, c: &Annotatio
         }
     }
     let mut current = std::mem::take(active);
-    add(items, &mut current, 0, c.start);
+    add(items, &mut current, 0, here);
     let mut hit = None;
     for (i, start) in current {
         match items[i] {
             PatItem::Gap => add(items, active, i, start),
             ref item if item.matches(c) => {
                 if i + 1 == items.len() {
-                    hit = Some(hit.map_or(start, |h: u64| h.max(start)));
+                    hit = Some(hit.map_or(start, |h: T| h.max(start)));
                 } else {
                     add(items, active, i + 1, start);
                 }
@@ -998,6 +1041,46 @@ mod tests {
         assert!(sr > go(vec![PatItem::Start { repeated: false }], false).unwrap());
         // Or any NAK: fires at BE although 77 is never addressed.
         assert_eq!(go(vec![addr(0x77, 0x7F, None, false)], true), Some(be));
+    }
+
+    #[test]
+    fn pattern_search_reports_where_matches_begin() {
+        let ann = |v: u32| Annotation {
+            start: 0,
+            end: 1,
+            value: v,
+            lane: 0,
+            kind: Kind::Data,
+            bits: 8,
+            flags: 0,
+        };
+        let seq: Vec<Annotation> = [1, 2, 3, 1, 9, 3].iter().map(|&v| ann(v)).collect();
+        let e = |v: u32| PatItem::Char {
+            value: v,
+            care: 0xFF,
+        };
+        // "1 * 3": matches 0..=2 and 3..=5.
+        let mut s = PatternSearch::new(vec![e(1), PatItem::Gap, e(3)]).unwrap();
+        let ends: Vec<(usize, usize)> = seq
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| s.feed(i, a).map(|f| (f, i)))
+            .collect();
+        assert_eq!(ends, vec![(0, 2), (3, 5)]);
+        assert!(s.found_in(&seq[3..]));
+        // Matches do not overlap: "1 * 3" in 1 1 3 3 is one match (1..=2, the shortest), not three.
+        let seq2: Vec<Annotation> = [1, 1, 3, 3].iter().map(|&v| ann(v)).collect();
+        let mut s = PatternSearch::new(vec![e(1), PatItem::Gap, e(3)]).unwrap();
+        let found: Vec<(usize, usize)> = seq2
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| s.feed(i, a).map(|f| (f, i)))
+            .collect();
+        assert_eq!(found, vec![(1, 2)]);
+        assert!(!PatternSearch::new(vec![e(3), e(1), e(2)])
+            .unwrap()
+            .found_in(&seq));
+        assert!(PatternSearch::new(vec![PatItem::Gap]).is_none());
     }
 
     #[test]

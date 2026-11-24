@@ -5,6 +5,7 @@ use crate::view::format_split;
 use bf_decode::engine::DecoderHandle;
 use bf_decode::i2c::{I2c, I2cConfig};
 use bf_decode::spi::{Spi, SpiConfig};
+use bf_decode::trigger::PatItem;
 use bf_decode::uart::{GapUnit, Parity, Protocol, Uart, UartConfig};
 use bf_decode::{Annotation, Decoder, Format, Kind};
 use egui::{vec2, Color32, Rect, RichText, Sense};
@@ -936,7 +937,10 @@ fn info_with_bytes(a: &Annotation, chars: &[Annotation]) -> String {
 struct SearchKey {
     id: u32,
     lane: usize,
+    /// Lower case, for the text search.
     query: String,
+    /// As typed, for the pattern.
+    raw: String,
     fmt: Format,
     errors_only: bool,
     /// Start of the first annotation: changes when old data is evicted (indices shift).
@@ -948,7 +952,91 @@ struct SearchKey {
 struct Search {
     key: SearchKey,
     scanned: usize,
+    /// Sorted, without duplicates.
     hits: Vec<u32>,
+    /// The query as a pattern of the decoder's trigger language, and where it applies.
+    pattern: Option<bf_decode::trigger::PatternSearch>,
+    scope: PatternScope,
+}
+
+/// How a pattern search applies to the rows of a lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PatternScope {
+    /// The rows are the items (UART characters, SPI words, I2C events): every row of a match is a hit.
+    Items,
+    /// The rows hold characters of lane 0 (telegrams, Modbus frames): a row containing a match is a hit.
+    Contents,
+    None,
+}
+
+fn pattern_scope(cfg: &Config, lane: usize) -> PatternScope {
+    match (cfg, lane) {
+        (Config::Uart(_), 0) | (Config::Spi(_), 0 | 1) | (Config::I2c(_), 0) => PatternScope::Items,
+        (Config::Uart(_), 1) => PatternScope::Contents,
+        _ => PatternScope::None,
+    }
+}
+
+/// The query in the trigger pattern language of the decoder (UART: hex, or text when it has a
+/// backslash escape; SPI: words; I2C: events). `None` if it is not a pattern.
+fn query_pattern(cfg: &Config, raw: &str) -> Option<Vec<PatItem>> {
+    let raw = raw.trim();
+    let items = match cfg {
+        Config::Uart(_) if raw.contains('\\') => crate::setup::parse_text_pattern(raw),
+        Config::Uart(_) => crate::setup::parse_hex_pattern(raw),
+        Config::Spi(c) => crate::setup::parse_word_pattern(raw, c.bits as u32),
+        Config::I2c(_) => crate::setup::parse_i2c_pattern(raw),
+    }
+    .ok()?;
+    items.iter().any(|i| *i != PatItem::Gap).then_some(items)
+}
+
+/// Add row `i` to the sorted hits (rows of a pattern match can come after later text hits).
+fn add_hit(hits: &mut Vec<u32>, i: usize) {
+    let i = i as u32;
+    match hits.last() {
+        Some(&last) if last >= i => {
+            if let Err(at) = hits.binary_search(&i) {
+                hits.insert(at, i);
+            }
+        }
+        _ => hits.push(i),
+    }
+}
+
+/// Search rows `s.scanned..end` of `lane`: text matches, and matches of the pattern.
+fn search_slice(
+    s: &mut Search,
+    lane: &[Annotation],
+    end: usize,
+    lane_name: &str,
+    chars: &[Annotation],
+) {
+    let (query, fmt, errors_only) = (s.key.query.clone(), s.key.fmt, s.key.errors_only);
+    let ok = |a: &Annotation| !errors_only || a.is_error();
+    for (i, a) in lane.iter().enumerate().take(end).skip(s.scanned) {
+        let mut hit = ok(a) && !query.is_empty() && matches(a, lane_name, &query, fmt, chars);
+        hit |= errors_only && query.is_empty() && a.is_error();
+        match (&mut s.pattern, s.scope) {
+            (Some(p), PatternScope::Contents) => {
+                hit |= ok(a) && p.found_in(bf_decode::telegram_chars(chars, a));
+            }
+            (Some(p), PatternScope::Items) => {
+                if let Some(first) = p.feed(i, a) {
+                    for (j, b) in lane.iter().enumerate().take(i + 1).skip(first) {
+                        if ok(b) {
+                            add_hit(&mut s.hits, j);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        if hit {
+            add_hit(&mut s.hits, i);
+        }
+    }
+    s.scanned = end;
 }
 
 /// Case-insensitive match of the lower-case `q` against the value (in the display format and in hex,
@@ -959,12 +1047,9 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
         return true;
     }
     if a.kind == Kind::Telegram {
-        // A telegram matches on its text (in the display format and in hex), on a byte sequence and on
-        // its lane name.
+        // A telegram matches on its text (in the display format and in hex) and its lane name (byte
+        // patterns are looked for by the search itself).
         let cs = bf_decode::telegram_chars(chars, a);
-        if query_bytes(q).is_some_and(|b| contains_bytes(cs, &b)) {
-            return true;
-        }
         let mut t = bf_decode::telegram_text(cs, fmt, usize::MAX);
         t.make_ascii_lowercase();
         if t.contains(q) {
@@ -973,11 +1058,6 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
         let mut h = bf_decode::telegram_text(cs, Format::Hex, usize::MAX);
         h.make_ascii_lowercase();
         return h.contains(q) || lane.to_ascii_lowercase().contains(q);
-    }
-    if a.kind == Kind::ModbusFrame
-        && query_bytes(q).is_some_and(|b| contains_bytes(bf_decode::telegram_chars(chars, a), &b))
-    {
-        return true;
     }
     let mut label = a.label(fmt);
     label.make_ascii_lowercase();
@@ -994,41 +1074,6 @@ fn matches(a: &Annotation, lane: &str, q: &str, fmt: Format, chars: &[Annotation
     lane.to_ascii_lowercase().contains(q)
         || (a.flags != 0 || a.kind == Kind::Address || a.kind == Kind::ModbusFrame)
             && info_with_bytes(a, chars).to_ascii_lowercase().contains(q)
-}
-
-/// A search query read as a byte sequence: hex bytes separated by spaces or commas, each with an
-/// optional `0x` or `\x` ("65 06", "0x65,0x06", "\x65\x06"), or one run of an even number of hex
-/// digits ("6506"). `None` if it is not one.
-fn query_bytes(q: &str) -> Option<Vec<u32>> {
-    let s = q.replace("\\x", " ").replace([',', ';'], " ");
-    let tokens: Vec<&str> = s
-        .split_whitespace()
-        .map(|t| t.strip_prefix("0x").unwrap_or(t))
-        .collect();
-    let hex = |t: &str| !t.is_empty() && t.chars().all(|c| c.is_ascii_hexdigit());
-    let bytes: Vec<u32> = match tokens.as_slice() {
-        [] => return None,
-        [one] if one.len() >= 2 && one.len() % 2 == 0 && hex(one) => (0..one.len())
-            .step_by(2)
-            .map(|i| u32::from_str_radix(&one[i..i + 2], 16))
-            .collect::<Result<_, _>>()
-            .ok()?,
-        many if many.len() > 1 && many.iter().all(|t| t.len() <= 2 && hex(t)) => many
-            .iter()
-            .map(|t| u32::from_str_radix(t, 16))
-            .collect::<Result<_, _>>()
-            .ok()?,
-        _ => return None,
-    };
-    Some(bytes)
-}
-
-/// The characters contain `seq` as consecutive values.
-fn contains_bytes(chars: &[Annotation], seq: &[u32]) -> bool {
-    !seq.is_empty()
-        && chars
-            .windows(seq.len())
-            .any(|w| w.iter().map(|a| a.value).eq(seq.iter().copied()))
 }
 
 /// The row to jump to from the selection (the row whose annotation starts at `sel`) in direction `dir`
@@ -1123,6 +1168,7 @@ pub fn table_ui(
         id: entry.handle.id.0,
         lane: st.lane,
         query: query.clone(),
+        raw: st.filter.trim().to_string(),
         fmt,
         errors_only: st.errors_only,
         first: lane.first().map_or(0, |a| a.start),
@@ -1131,20 +1177,22 @@ pub fn table_ui(
         st.search = None;
     } else {
         if st.search.as_ref().is_none_or(|s| s.key != key) {
+            let scope = pattern_scope(&entry.cfg, st.lane);
+            let pattern = (scope != PatternScope::None)
+                .then(|| query_pattern(&entry.cfg, &key.raw))
+                .flatten()
+                .and_then(bf_decode::trigger::PatternSearch::new);
             st.search = Some(Search {
                 key,
                 scanned: 0,
                 hits: Vec::new(),
+                pattern,
+                scope,
             });
         }
         if let Some(s) = st.search.as_mut() {
             let end = (s.scanned + SEARCH_SLICE).min(lane.len());
-            for (i, a) in lane.iter().enumerate().take(end).skip(s.scanned) {
-                if (!st.errors_only || a.is_error()) && matches(a, lane_name, &query, fmt, chars) {
-                    s.hits.push(i as u32);
-                }
-            }
-            s.scanned = end;
+            search_slice(s, lane, end, lane_name, chars);
             if s.scanned < lane.len() {
                 ui.ctx().request_repaint();
             }
@@ -1170,7 +1218,7 @@ pub fn table_ui(
         }
         let r = ui
             .add(egui::TextEdit::singleline(&mut st.filter).hint_text("search (Ctrl+F)").desired_width(190.0))
-            .on_hover_text("Text or values. Telegrams and Modbus frames are also searched for byte sequences: 65 06, 6506, 0x65,0x06 or \\x65\\x06.");
+            .on_hover_text("Text or values, or a pattern as in the trigger: UART bytes (65 06, 4X, XX, 0b1010XXXX, * for anything in between; text with \\xXX and \\*), SPI words (A5 * 3X), I2C events (S @50W 01 XX! P). On the characters, words or events every item of a match is listed; telegrams and Modbus frames are listed when they contain one.");
         r.clone().on_hover_text("Finds values (in the display format or hex), lane names and words like nak, framing, parity, break, read, write.\nSearches the whole capture, not only what is visible.");
         if st.focus_search {
             r.request_focus();
@@ -1558,43 +1606,130 @@ mod tests {
         assert_eq!(info_with_bytes(&frame, &chars), "65 06 01 01  (CRC error)");
     }
 
-    #[test]
-    fn byte_sequences_are_found_in_any_notation() {
-        assert_eq!(query_bytes("6506"), Some(vec![0x65, 0x06]));
-        assert_eq!(query_bytes("65 06 01"), Some(vec![0x65, 0x06, 0x01]));
-        assert_eq!(query_bytes("0x65,0x06"), Some(vec![0x65, 0x06]));
-        assert_eq!(query_bytes("0x65, 6"), Some(vec![0x65, 0x06]));
-        assert_eq!(query_bytes("\\x65\\x06"), Some(vec![0x65, 0x06]));
-        assert_eq!(query_bytes("ok"), None);
-        assert_eq!(query_bytes("650"), None, "odd number of digits");
-        assert_eq!(query_bytes("hello world"), None);
-        assert_eq!(query_bytes(""), None);
+    /// A search of `query` over `lane` of a decoder with settings `cfg`.
+    fn search(cfg: &Config, lane_no: usize, query: &str, errors_only: bool) -> Search {
+        let scope = pattern_scope(cfg, lane_no);
+        Search {
+            key: SearchKey {
+                id: 1,
+                lane: lane_no,
+                query: query.trim().to_lowercase(),
+                raw: query.trim().to_string(),
+                fmt: Format::Hex,
+                errors_only,
+                first: 0,
+            },
+            scanned: 0,
+            hits: Vec::new(),
+            pattern: query_pattern(cfg, query).and_then(bf_decode::trigger::PatternSearch::new),
+            scope,
+        }
+    }
 
-        let chars: Vec<Annotation> = [0x65u32, 0x06, 0x01, 0x01, 0x00]
-            .iter()
+    fn text_lane(text: &[u8]) -> Vec<Annotation> {
+        text.iter()
             .enumerate()
             .map(|(i, &v)| Annotation {
                 start: i as u64 * 10,
                 end: i as u64 * 10 + 10,
-                ..ann(Kind::Data, v, 0)
+                ..ann(Kind::Data, v as u32, 0)
             })
-            .collect();
-        let t = Annotation {
-            start: 0,
-            end: 50,
+            .collect()
+    }
+
+    fn hits(
+        cfg: &Config,
+        lane: &[Annotation],
+        chars: &[Annotation],
+        lane_no: usize,
+        q: &str,
+    ) -> Vec<u32> {
+        let mut s = search(cfg, lane_no, q, false);
+        search_slice(&mut s, lane, lane.len(), "RX", chars);
+        s.hits
+    }
+
+    #[test]
+    fn search_finds_trigger_patterns_on_characters() {
+        let uart = Config::default_for(DecoderKind::Uart);
+        let chars = text_lane(b"hello world");
+        // l, any, space: "lo " at 3..=5; every row of the match is listed.
+        assert_eq!(hits(&uart, &chars, &chars, 0, "6C XX 20"), vec![3, 4, 5]);
+        // A gap: h ... o matches "hello" (0..=4, the shortest match ending at the first o).
+        assert_eq!(
+            hits(&uart, &chars, &chars, 0, "68 * 6F"),
+            vec![0, 1, 2, 3, 4]
+        );
+        // Multi-byte in any of the old notations.
+        assert_eq!(hits(&uart, &chars, &chars, 0, "6c6c"), vec![2, 3]);
+        assert_eq!(hits(&uart, &chars, &chars, 0, "0x6C,0x6F"), vec![3, 4]);
+        // Text with escapes is a text pattern (case sensitive). Spaces at the ends of the query are
+        // dropped like in any search field: write \x20 there.
+        assert_eq!(hits(&uart, &chars, &chars, 0, "l\\xXX\\x20"), vec![3, 4, 5]);
+        assert_eq!(
+            hits(&uart, &chars, &chars, 0, "L\\xXX\\x20"),
+            Vec::<u32>::new()
+        );
+        // A match spread over two slices is found the same way.
+        let mut s = search(&uart, 0, "6C XX 20", false);
+        search_slice(&mut s, &chars, 4, "RX", &chars);
+        search_slice(&mut s, &chars, chars.len(), "RX", &chars);
+        assert_eq!(s.hits, vec![3, 4, 5]);
+        // Not a pattern: the plain text search as before.
+        assert_eq!(hits(&uart, &chars, &chars, 0, "nothing"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn pattern_hits_and_text_hits_merge_in_order() {
+        let mut v = vec![1, 5];
+        add_hit(&mut v, 3);
+        add_hit(&mut v, 5);
+        add_hit(&mut v, 9);
+        assert_eq!(v, vec![1, 3, 5, 9]);
+        // Errors only: rows of a match without an error are left out.
+        let uart = Config::default_for(DecoderKind::Uart);
+        let mut chars = text_lane(b"abc");
+        chars[1].flags = bf_decode::flag::FRAMING;
+        let mut s = search(&uart, 0, "61 62 63", true);
+        search_slice(&mut s, &chars, 3, "RX", &chars);
+        assert_eq!(s.hits, vec![1]);
+    }
+
+    #[test]
+    fn search_finds_patterns_in_telegrams_and_i2c_events() {
+        let uart = Config::default_for(DecoderKind::Uart);
+        let chars = text_lane(b"AT+X\r\nOK\r\n");
+        let tele = |start: u64, end: u64, n: u32| Annotation {
+            start,
+            end,
             lane: 1,
-            ..ann(Kind::Telegram, 5, 0)
+            ..ann(Kind::Telegram, n, 0)
         };
-        for q in ["6506", "0x06 0x01", "\\x01\\x01\\x00", "06,01,01"] {
-            assert!(matches(&t, "Telegram", q, Format::Ascii, &chars), "{q}");
-        }
-        assert!(!matches(&t, "Telegram", "0601 00", Format::Ascii, &chars));
-        assert!(!matches(&t, "Telegram", "0665", Format::Hex, &chars));
-        let frame = Annotation {
-            kind: Kind::ModbusFrame,
-            ..t
+        let telegrams = vec![tele(0, 60, 6), tele(60, 100, 4)];
+        // "4F 4B" (OK) is in the second telegram only; "XX 0D 0A" in both.
+        assert_eq!(hits(&uart, &telegrams, &chars, 1, "4F 4B"), vec![1]);
+        assert_eq!(hits(&uart, &telegrams, &chars, 1, "XX 0D 0A"), vec![0, 1]);
+        // I2C: S @50W 01 3C P as annotations on one lane.
+        let i2c = Config::default_for(DecoderKind::I2c);
+        let ev = |i: u64, kind, value, flags| Annotation {
+            start: i * 10,
+            end: i * 10 + 10,
+            value,
+            lane: 0,
+            kind,
+            bits: 8,
+            flags,
         };
-        assert!(matches(&frame, "Frame", "65060101", Format::Hex, &chars));
+        let lane = vec![
+            ev(0, Kind::Start, 0, 0),
+            ev(1, Kind::Address, 0x50, 0),
+            ev(2, Kind::Data, 0x01, 0),
+            ev(3, Kind::Data, 0x3C, bf_decode::flag::NAK),
+            ev(4, Kind::Stop, 0, 0),
+        ];
+        assert_eq!(hits(&i2c, &lane, &lane, 0, "@50W 01 XX!"), vec![1, 2, 3]);
+        assert_eq!(hits(&i2c, &lane, &lane, 0, "S * P"), vec![0, 1, 2, 3, 4]);
+        assert_eq!(hits(&i2c, &lane, &lane, 0, "@50R"), Vec::<u32>::new());
     }
 
     #[test]
