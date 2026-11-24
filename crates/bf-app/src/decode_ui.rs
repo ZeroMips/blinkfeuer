@@ -1118,6 +1118,17 @@ pub fn neighbour_row(
     }
 }
 
+/// The time column: of a row starting at `start`, or with `delta` since the row before it (`before`; the
+/// first row has none).
+fn row_time(start: u64, before: Option<u64>, delta: bool, origin: f64, rate: f64) -> String {
+    let t = match (delta, before) {
+        (false, _) => start as f64 - origin,
+        (true, Some(b)) => start as f64 - b as f64,
+        (true, None) => return "-".into(),
+    };
+    format_split(t / rate, 1.0 / rate)
+}
+
 /// State of the annotation table.
 #[derive(Default)]
 pub struct TableState {
@@ -1126,6 +1137,8 @@ pub struct TableState {
     pub lane: usize,
     pub filter: String,
     pub errors_only: bool,
+    /// Show the time since the previous row instead of the time in the capture.
+    pub delta: bool,
     search: Option<Search>,
     /// Reveal this annotation (index in the lane) on the next frame.
     pub scroll_to: Option<usize>,
@@ -1135,13 +1148,13 @@ pub struct TableState {
     columns: Columns,
 }
 
-type ColumnsKey = (u32, usize, Format);
+type ColumnsKey = (u32, usize, Format, bool);
 
 /// Widths of the table's columns except the last, which takes the rest. They fit the rows seen so far
 /// and never shrink while the same lane is shown, so that scrolling does not make them jump.
 #[derive(Default)]
 struct Columns {
-    /// Decoder, lane and format the widths are for.
+    /// Decoder, lane, format and delta times: what the widths are for.
     key: Option<ColumnsKey>,
     widths: [f32; 3],
 }
@@ -1293,6 +1306,7 @@ pub fn table_ui(
             st.filter.clear();
         }
         ui.checkbox(&mut st.errors_only, "errors only").on_hover_text("Only annotations flagged as errors (framing, parity, break, incomplete word).");
+        ui.checkbox(&mut st.delta, "delta time").on_hover_text("Show the time from the start of the previous row to the start of this one, instead of the time in the capture. While searching the previous row is the previous hit.");
         let prev = ui.button("Prev").on_hover_text("Previous row (Shift+F3)").clicked();
         let next = ui.button("Next").on_hover_text("Next row (F3)").clicked();
         if prev {
@@ -1329,25 +1343,28 @@ pub fn table_ui(
     }
 
     // ---- header
+    let delta = st.delta;
+    let time_title = if delta { "Delta" } else { "Start" };
     let titles = if is_telegram_lane {
-        ["Start", "Duration", "Bytes", "Text"]
+        [time_title, "Duration", "Bytes", "Text"]
     } else {
-        ["Start", "Duration", "Value", "Info"]
+        [time_title, "Duration", "Value", "Info"]
     };
     let min = [140.0, 90.0, if is_telegram_lane { 70.0 } else { 110.0 }];
     let font = egui::FontId::monospace(11.0);
-    let start_text = |row: usize| {
+    let time_text = |row: usize| {
         let start = lane[ann_index(row)].start;
-        format_split((start as f64 - origin) / rate, 1.0 / rate)
+        let before = row.checked_sub(1).map(|r| lane[ann_index(r)].start);
+        row_time(start, before, delta, origin, rate)
     };
     let cols = &mut st.columns;
-    cols.show((entry.handle.id.0, st.lane, fmt), min);
+    cols.show((entry.handle.id.0, st.lane, fmt, delta), min);
     // The last row has the longest time, or (before the trigger) the first one.
-    if total > 0 {
+    if !delta && total > 0 {
         for row in [0, total - 1] {
             let g = ui
                 .painter()
-                .layout_no_wrap(start_text(row), font.clone(), theme::TEXT);
+                .layout_no_wrap(time_text(row), font.clone(), theme::TEXT);
             cols.fit(0, g.size().x);
         }
     }
@@ -1398,7 +1415,7 @@ pub fn table_ui(
             };
             let duration = crate::view::format_duration((a.end - a.start) as f64 / rate);
             let cells = [
-                (start_text(row), theme::TEXT),
+                (time_text(row), theme::TEXT),
                 (duration, theme::TEXT_DIM),
                 (third, third_color),
                 fourth,
@@ -1555,9 +1572,18 @@ mod tests {
     }
 
     #[test]
+    fn row_times_are_absolute_or_since_the_row_before() {
+        let t = |before, delta| row_time(5_000, before, delta, 1_000.0, 1e6);
+        assert_eq!(t(Some(3_500), false), "4 ms 000 µs");
+        assert_eq!(t(Some(3_500), true), "1 ms 500 µs");
+        assert_eq!(t(None, false), "4 ms 000 µs");
+        assert_eq!(t(None, true), "-");
+    }
+
+    #[test]
     fn table_columns_do_not_overlap() {
         let mut c = Columns::default();
-        c.show((1, 0, Format::Hex), [140.0, 90.0, 110.0]);
+        c.show((1, 0, Format::Hex, false), [140.0, 90.0, 110.0]);
         for (i, w) in [(0, 230.0), (1, 60.0), (2, 9_000.0), (3, 9_000.0)] {
             c.fit(i, w);
         }
@@ -1571,7 +1597,7 @@ mod tests {
         // Narrower rows do not shrink them, another lane does.
         c.fit(0, 10.0);
         assert!(c.widths[0] > 230.0);
-        c.show((1, 1, Format::Hex), [140.0, 90.0, 110.0]);
+        c.show((1, 1, Format::Hex, false), [140.0, 90.0, 110.0]);
         assert_eq!(c.widths, [140.0, 90.0, 110.0]);
     }
 
