@@ -111,14 +111,7 @@ fn spi_word_triggers_at_the_end_of_the_word() {
         .find(|e| *e >= pre)
         .expect("A5 in the reference decode");
     let store = capture(
-        ProtocolTrigger::Spi(
-            cfg,
-            SpiMatch::Word {
-                lane: SpiLane::Mosi,
-                value: 0xA5,
-                care: 0xFF,
-            },
-        ),
+        ProtocolTrigger::Spi(cfg, SpiMatch::word(SpiLane::Mosi, 0xA5, 0xFF)),
         TriggerAt::End,
         pre,
         post,
@@ -148,13 +141,7 @@ fn i2c_address_and_direction_trigger_at_the_address_byte() {
         .next()
         .unwrap();
     let store = capture(
-        ProtocolTrigger::I2c(
-            cfg.clone(),
-            I2cMatch::Address {
-                addr: 0x50,
-                read: Some(false),
-            },
-        ),
+        ProtocolTrigger::I2c(cfg.clone(), I2cMatch::address(0x50, Some(false))),
         TriggerAt::End,
         pre,
         post,
@@ -162,15 +149,11 @@ fn i2c_address_and_direction_trigger_at_the_address_byte() {
     check_window(&store, &words, expect, pre, post);
     // The same address as a read never happens in the generator's traffic: the capture would wait
     // forever, so only check that the trigger refuses nothing and builds.
-    assert!(ProtocolTrigger::I2c(
-        cfg,
-        I2cMatch::Address {
-            addr: 0x50,
-            read: Some(true)
-        }
-    )
-    .build(TriggerAt::End)
-    .is_ok());
+    assert!(
+        ProtocolTrigger::I2c(cfg, I2cMatch::address(0x50, Some(true)))
+            .build(TriggerAt::End)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -220,14 +203,7 @@ fn the_start_of_the_match_can_be_the_trigger_instead_of_its_end() {
         .find(|s| *s >= 2_000)
         .unwrap();
     let store = capture(
-        ProtocolTrigger::Spi(
-            spi,
-            SpiMatch::Word {
-                lane: SpiLane::Mosi,
-                value: 0xA5,
-                care: 0xFF,
-            },
-        ),
+        ProtocolTrigger::Spi(spi, SpiMatch::word(SpiLane::Mosi, 0xA5, 0xFF)),
         TriggerAt::Start,
         2_000,
         3_000,
@@ -245,13 +221,7 @@ fn the_start_of_the_match_can_be_the_trigger_instead_of_its_end() {
         .find(|a| a.kind == Kind::Address && a.value == 0x50 && a.start >= 500)
         .unwrap();
     let store = capture(
-        ProtocolTrigger::I2c(
-            i2c,
-            I2cMatch::Address {
-                addr: 0x50,
-                read: None,
-            },
-        ),
+        ProtocolTrigger::I2c(i2c, I2cMatch::address(0x50, None)),
         TriggerAt::Start,
         500,
         4_000,

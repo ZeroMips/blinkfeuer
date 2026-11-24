@@ -1,9 +1,7 @@
 //! The contents of the Trigger window: pattern conditions per channel, or a protocol to look for.
 
 use crate::decode_ui::{self, BaudProbe, Config};
-use crate::setup::{
-    Direction, I2cWhat, ProtocolSetup, Span, SpanUnit, TriggerMode, TriggerSetup, UartWhat,
-};
+use crate::setup::{ProtocolSetup, Span, SpanUnit, TriggerMode, TriggerSetup, UartWhat};
 use crate::theme;
 use crate::view::format_split;
 use bf_core::Cond;
@@ -250,6 +248,22 @@ fn example(
     true
 }
 
+/// What is wrong with a typed pattern: it does not parse, or it has nothing to look for (and the
+/// alternative is off).
+fn pattern_error(
+    parsed: Result<Vec<PatItem>, String>,
+    alternative: bool,
+    what: &str,
+) -> Option<String> {
+    match parsed {
+        Err(e) => Some(e),
+        Ok(items) if !alternative && items.iter().all(|i| *i == PatItem::Gap) => {
+            Some(format!("enter at least one {what}"))
+        }
+        Ok(_) => None,
+    }
+}
+
 /// The decoder settings of a protocol trigger: its own (editable), or those of a decoder of the same
 /// kind (shown, edited in the decoder setup). Returns changed own settings.
 #[allow(clippy::too_many_arguments)]
@@ -424,16 +438,7 @@ fn uart(
                 }
             }
         });
-        let err = p
-            .uart_pattern()
-            .and_then(|items| {
-                if items.iter().any(|i| matches!(i, PatItem::Char { .. })) {
-                    Ok(())
-                } else {
-                    Err("enter at least one character".into())
-                }
-            })
-            .err();
+        let err = pattern_error(p.uart_pattern(), p.uart_or_error, "character");
         entry(ui, &mut p.uart_bytes, 260.0, err.as_deref());
         dim(
             ui,
@@ -474,27 +479,24 @@ fn spi(
         p.spi = c;
     }
     ui.add_space(6.0);
-    ui.label(RichText::new("Look for a word").color(theme::TEXT).strong());
+    ui.label(RichText::new("Look for words").color(theme::TEXT).strong());
     ui.horizontal(|ui| {
         ui.selectable_value(&mut p.spi_miso, false, "on MOSI");
         ui.selectable_value(&mut p.spi_miso, true, "on MISO");
     });
-    egui::Grid::new("trg_spi_word")
-        .num_columns(2)
-        .spacing([10.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("Value (hex)");
-            let err = crate::setup::parse_hex_u32(&p.spi_value).err();
-            entry(ui, &mut p.spi_value, 90.0, err.as_deref());
-            ui.end_row();
-            ui.label("Bits that must match (hex)");
-            let err = crate::setup::parse_hex_u32(&p.spi_care).err();
-            entry(ui, &mut p.spi_care, 90.0, err.as_deref());
-            ui.end_row();
-        });
+    let err = pattern_error(
+        crate::setup::parse_word_pattern(&p.spi_pattern, p.spi.bits as u32),
+        p.spi_or_incomplete,
+        "word",
+    );
+    entry(ui, &mut p.spi_pattern, 260.0, err.as_deref());
     dim(
         ui,
-        "Bits that are 0 in the second field are ignored (FF = all bits, 0F = low nibble only).",
+        "One word per entry in hex, e.g. A5 3C (16 bits: 12AB); X is a free nibble (AX, XX), 0b1010XXXX single bits, * any words in between.",
+    );
+    ui.checkbox(
+        &mut p.spi_or_incomplete,
+        "or a word cut short by the end of the transaction",
     );
     trigger_point(ui, p);
 }
@@ -523,33 +525,16 @@ fn i2c(
     }
     ui.add_space(6.0);
     ui.label(RichText::new("Look for").color(theme::TEXT).strong());
-    egui::ComboBox::from_id_salt("trg_i2c_what")
-        .selected_text(p.i2c_what.label())
-        .show_ui(ui, |ui| {
-            for w in I2cWhat::ALL {
-                ui.selectable_value(&mut p.i2c_what, w, w.label());
-            }
-        });
-    match p.i2c_what {
-        I2cWhat::Address | I2cWhat::Data => {
-            ui.horizontal(|ui| {
-                ui.label(if p.i2c_what == I2cWhat::Address {
-                    "Address (hex, 7 bit)"
-                } else {
-                    "Byte (hex)"
-                });
-                let err = crate::setup::parse_hex_u32(&p.i2c_value).err();
-                entry(ui, &mut p.i2c_value, 70.0, err.as_deref());
-            });
-            if p.i2c_what == I2cWhat::Address {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut p.i2c_dir, Direction::Any, "Read or write");
-                    ui.selectable_value(&mut p.i2c_dir, Direction::Read, "Read");
-                    ui.selectable_value(&mut p.i2c_dir, Direction::Write, "Write");
-                });
-            }
-        }
-        _ => {}
-    }
+    let err = pattern_error(
+        crate::setup::parse_i2c_pattern(&p.i2c_pattern),
+        p.i2c_or_nak,
+        "item",
+    );
+    entry(ui, &mut p.i2c_pattern, 260.0, err.as_deref());
+    dim(
+        ui,
+        "S START, Sr repeated START, P STOP, @50 address (@50W write, @50R read), 3C data byte, ! after an address or byte: not acknowledged, X a free nibble, * anything in between. E.g. S @50W 01 XX P",
+    );
+    ui.checkbox(&mut p.i2c_or_nak, "or any byte that is not acknowledged");
     trigger_point(ui, p);
 }

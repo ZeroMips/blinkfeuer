@@ -317,9 +317,7 @@ pub fn build_trigger(t: &ProtocolTrigger, at: TriggerAt, names: &[String]) -> Op
     t.check().ok()?;
     let mut p = match t {
         ProtocolTrigger::Uart(cfg, m) => uart_trigger(cfg, m, at, names),
-        ProtocolTrigger::Spi(cfg, SpiMatch::Word { lane, value, care }) => {
-            spi_trigger(cfg, *lane, *value, *care, names)
-        }
+        ProtocolTrigger::Spi(cfg, m) => spi_trigger(cfg, m, names),
         ProtocolTrigger::I2c(cfg, m) => i2c_trigger(cfg, m, names),
     };
     p.0.trigger = trigger_sample(t, at, &p.1);
@@ -380,8 +378,8 @@ fn uart_trigger(
     let mask = ((1u32 << cfg.data_bits.min(8)) - 1) as u8;
     // A character the trigger does not look for, then what it looks for.
     let fits = |c: u8, item: &PatItem| match *item {
-        PatItem::Char { value, care } => (c as u16 ^ value) & care & 0xFF == 0,
-        PatItem::Gap => true,
+        PatItem::Char { value, care } => (c as u32 ^ value) & care & 0xFF == 0,
+        _ => true,
     };
     let (chars, broken): (Vec<u8>, bool) = match m {
         UartMatch::Pattern { items, .. } => {
@@ -398,7 +396,7 @@ fn uart_trigger(
                         chars.push(((value & care | 0x55 & !care) as u8) & mask)
                     }
                     // Anything in between: two characters.
-                    PatItem::Gap => chars.extend([0x2E & mask, 0x2E & mask]),
+                    _ => chars.extend([0x2E & mask, 0x2E & mask]),
                 }
             }
             (chars, false)
@@ -467,13 +465,12 @@ fn uart_trigger(
     (p, w)
 }
 
-fn spi_trigger(
-    cfg: &bf_decode::spi::SpiConfig,
-    lane: SpiLane,
-    value: u32,
-    care: u32,
-    names: &[String],
-) -> (Preview, Wave) {
+/// A concrete value for a pattern value: the fixed bits, and 0101... for the free ones.
+fn concrete(value: u32, care: u32, full: u32) -> u32 {
+    (value & care | 0x5555_5555 & !care) & full
+}
+
+fn spi_trigger(cfg: &bf_decode::spi::SpiConfig, m: &SpiMatch, names: &[String]) -> (Preview, Wave) {
     const HALF: u64 = 8;
     let bits = cfg.bits as u64;
     let full = if bits >= 32 {
@@ -481,20 +478,32 @@ fn spi_trigger(
     } else {
         (1u32 << bits) - 1
     };
-    let (value, care) = (value & full, care & full);
-    // A word that differs in a bit that has to match, then the word looked for (bits that do not
-    // matter are filled with a pattern, to show that they are ignored).
-    let wanted = value & care | 0xA5A5_A5A5 & !care & full;
-    let mut words = Vec::new();
-    if care != 0 {
-        let top = 31 - care.leading_zeros();
-        words.push(wanted ^ (1 << top));
+    let filler = 0x3A5C_69D1 & full;
+    // A word the pattern does not start with, then the pattern's words (gaps: two filler words).
+    let first_fits = |w: u32| match m.items.first() {
+        Some(PatItem::Char { value, care }) => (w ^ value) & care == 0,
+        _ => false,
+    };
+    let other = [0, full, filler, 0x5555_5555 & full]
+        .into_iter()
+        .find(|&w| !first_fits(w))
+        .unwrap_or(0);
+    let mut words = vec![other];
+    for it in &m.items {
+        match *it {
+            PatItem::Char { value, care } => words.push(concrete(value, care, full)),
+            _ => words.extend([filler, filler]),
+        }
     }
-    words.push(wanted);
-    let other: Vec<u32> = words.iter().map(|_| 0x3A5C_69D1 & full).collect();
-    let (mosi, miso) = match lane {
-        SpiLane::Mosi => (words.clone(), other),
-        SpiLane::Miso => (other, words.clone()),
+    // Only the alternative: a word, then one cut short.
+    let cut = m.items.is_empty();
+    if cut {
+        words.push(filler);
+    }
+    let other_line: Vec<u32> = words.iter().map(|_| 0x2468_ACE1 & full).collect();
+    let (mosi, miso) = match m.lane {
+        SpiLane::Mosi => (words.clone(), other_line),
+        SpiLane::Miso => (other_line, words.clone()),
     };
     let lead = 2 * HALF;
     let len = (lead + 2 * HALF * bits * words.len() as u64 + 10 * HALF + lead) as usize;
@@ -507,6 +516,13 @@ fn spi_trigger(
         if cfg.mosi.is_some() { &mosi } else { &[] },
         if cfg.miso.is_some() { &miso } else { &[] },
     );
+    if cut {
+        // CS goes away in the middle of the last word.
+        if let Some(cs) = cfg.cs {
+            let at = lead + HALF + 2 * HALF * bits * (words.len() as u64 - 1) + bits * HALF;
+            w.set(cs, at, len as u64, cfg.cs_active_low);
+        }
+    }
     let mut rows = Vec::new();
     let mut add = |label: &str, ch: u8| {
         rows.push(SigRow {
@@ -541,14 +557,22 @@ fn spi_trigger(
     if cfg.miso.is_some() {
         lanes.push(("MISO word".to_string(), decoded[1].clone()));
     }
-    let line = match lane {
+    let line = match m.lane {
         SpiLane::Mosi => "MOSI",
         SpiLane::Miso => "MISO",
     };
+    let what = match (m.items.is_empty(), m.or_incomplete) {
+        (true, _) => "a word cut short by the end of the transaction".to_string(),
+        (false, alt) => format!(
+            "{} on {line}{}",
+            crate::setup::format_word_pattern(&m.items, bits as u32),
+            if alt { " (or an incomplete word)" } else { "" }
+        ),
+    };
     let caption = vec![
         format!(
-            "The trigger looks for {value:0digits$X} on {line}, comparing the bits set in {care:0digits$X}; \
-             the word before it differs in one of them."
+            "The trigger looks for {what}; the word before it does not match. Free bits are \
+             shown as 0101."
         ),
         "T marks the trigger sample.".into(),
     ];
@@ -564,41 +588,124 @@ fn spi_trigger(
     (p, w)
 }
 
-fn i2c_trigger(cfg: &bf_decode::i2c::I2cConfig, m: &I2cMatch, names: &[String]) -> (Preview, Wave) {
+/// I2C traffic for an example, built item by item: START, address and STOP are added where the
+/// pattern leaves them out, so the bus sequence is always valid.
+struct I2cExample {
+    w: Wave,
+    scl: u8,
+    sda: u8,
+    t: u64,
+    in_txn: bool,
+    /// The last thing sent was a START (an address may follow directly).
+    after_start: bool,
+    labels: Vec<(f64, f64, String)>,
+}
+
+impl I2cExample {
     const Q: u64 = 8;
-    let lead = 3 * Q;
+
+    fn start(&mut self) {
+        let t0 = self.t;
+        self.t = self
+            .w
+            .i2c_start(self.scl, self.sda, self.t, Self::Q, self.in_txn);
+        let label = if self.in_txn { "Sr" } else { "S" };
+        self.labels.push((t0 as f64, self.t as f64, label.into()));
+        self.in_txn = true;
+        self.after_start = true;
+    }
+
+    fn byte(&mut self, b: u8, nak: bool, label: String) {
+        let t0 = self.t;
+        self.t = self.w.i2c_byte(self.scl, self.sda, self.t, Self::Q, b, nak);
+        let label = if nak { format!("{label} NAK") } else { label };
+        self.labels.push((t0 as f64, self.t as f64, label));
+        self.after_start = false;
+    }
+
+    fn address(&mut self, addr: u8, read: bool, nak: bool) {
+        if !self.after_start {
+            self.start();
+        }
+        let dir = if read { "R" } else { "W" };
+        self.byte(addr << 1 | read as u8, nak, format!("@{addr:02X} {dir}"));
+    }
+
+    /// Inside a transaction, after an address.
+    fn ensure_txn(&mut self) {
+        if !self.in_txn {
+            self.start();
+            self.address(0x50, false, false);
+        } else if self.after_start {
+            self.address(0x50, false, false);
+        }
+    }
+
+    fn stop(&mut self) {
+        let t0 = self.t;
+        self.t = self.w.i2c_stop(self.scl, self.sda, self.t, Self::Q);
+        self.labels.push((t0 as f64, self.t as f64, "P".into()));
+        self.in_txn = false;
+        self.after_start = false;
+    }
+}
+
+fn i2c_trigger(cfg: &bf_decode::i2c::I2cConfig, m: &I2cMatch, names: &[String]) -> (Preview, Wave) {
+    let q = I2cExample::Q;
+    let lead = 3 * q;
     let (scl, sda) = (cfg.scl, cfg.sda);
-    let (addr, read, data, nak) = match *m {
-        I2cMatch::Address { addr, read } => (addr, read.unwrap_or(false), 0x3C, false),
-        I2cMatch::Data(v) => (0x50, false, v, false),
-        I2cMatch::Nak => (0x50, false, 0x3C, true),
-        I2cMatch::Start | I2cMatch::Stop => (0x50, false, 0x3C, false),
+    let room = lead + (m.items.len() as u64 * 3 + 6) * 40 * q;
+    let mut e = I2cExample {
+        w: Wave::new(1e6, room as usize, (1 << scl) | (1 << sda)),
+        scl,
+        sda,
+        t: lead,
+        in_txn: false,
+        after_start: false,
+        labels: Vec::new(),
     };
-    let mut w = Wave::new(
-        1e6,
-        (lead + Q + 2 * 36 * Q + 3 * Q + lead) as usize,
-        (1 << scl) | (1 << sda),
-    );
-    let mut t = w.i2c_start(scl, sda, lead, Q, false);
-    let mut labels = vec![(lead as f64, t as f64, "S".to_string())];
-    let a0 = t;
-    t = w.i2c_byte(scl, sda, t, Q, addr << 1 | read as u8, false);
-    labels.push((
-        a0 as f64,
-        t as f64,
-        format!("{addr:02X} {}", if read { "R" } else { "W" }),
-    ));
-    let d0 = t;
-    t = w.i2c_byte(scl, sda, t, Q, data, nak);
-    labels.push((
-        d0 as f64,
-        t as f64,
-        format!("{data:02X}{}", if nak { " NAK" } else { "" }),
-    ));
-    let p0 = t;
-    t = w.i2c_stop(scl, sda, t, Q);
-    labels.push((p0 as f64, t as f64, "P".into()));
-    let len = (t + lead) as usize;
+    for it in &m.items {
+        match *it {
+            PatItem::Start { repeated } => {
+                if repeated && !e.in_txn {
+                    e.ensure_txn();
+                }
+                e.start();
+            }
+            PatItem::Stop => {
+                e.ensure_txn();
+                e.stop();
+            }
+            PatItem::Address {
+                value,
+                care,
+                read,
+                nak,
+            } => {
+                let addr = concrete(value, care, 0x7F) as u8;
+                e.address(addr, read.unwrap_or(false), nak);
+            }
+            PatItem::Char { value, care } | PatItem::CharNak { value, care } => {
+                e.ensure_txn();
+                let b = concrete(value, care, 0xFF) as u8;
+                e.byte(b, matches!(it, PatItem::CharNak { .. }), format!("{b:02X}"));
+            }
+            PatItem::Gap => {
+                e.ensure_txn();
+                e.byte(0x2E, false, "2E".into());
+            }
+        }
+    }
+    // Only the alternative: a byte that is not acknowledged.
+    if m.items.is_empty() {
+        e.ensure_txn();
+        e.byte(0x3C, true, "3C".into());
+    }
+    if e.in_txn {
+        e.stop();
+    }
+    let len = (e.t + lead) as usize;
+    let mut w = e.w;
     w.samples.truncate(len);
     let rows = vec![
         SigRow {
@@ -611,28 +718,25 @@ fn i2c_trigger(cfg: &bf_decode::i2c::I2cConfig, m: &I2cMatch, names: &[String]) 
         },
     ];
     let decoded = decode(&w, Box::new(I2c::new(cfg.clone())));
-    let what = match *m {
-        I2cMatch::Start => "a START condition".to_string(),
-        I2cMatch::Stop => "a STOP condition".to_string(),
-        I2cMatch::Address { addr, read } => format!(
-            "address {addr:02X}{}",
-            match read {
-                Some(true) => " (read)",
-                Some(false) => " (write)",
-                None => "",
-            }
+    let what = match (m.items.is_empty(), m.or_nak) {
+        (true, _) => "a byte that is not acknowledged".to_string(),
+        (false, nak) => format!(
+            "{}{}",
+            crate::setup::format_i2c_pattern(&m.items),
+            if nak { " (or any NAK)" } else { "" }
         ),
-        I2cMatch::Nak => "a byte that is not acknowledged".to_string(),
-        I2cMatch::Data(v) => format!("the data byte {v:02X}"),
     };
     let p = Preview {
         len,
         rows,
         marks: Vec::new(),
-        bit_labels: labels,
+        bit_labels: e.labels,
         lanes: vec![("decoded".into(), decoded[0].clone())],
         caption: vec![
-            format!("The trigger looks for {what}."),
+            format!(
+                "The trigger looks for {what}. START, address and STOP are added where the \
+                 pattern leaves them out; free bits are shown as 0101."
+            ),
             "T marks the trigger sample.".into(),
         ],
         trigger: None,
@@ -820,6 +924,36 @@ mod tests {
     }
 
     #[test]
+    fn trigger_examples_for_spi_and_i2c_patterns() {
+        // SPI: 12, anything, AX on MOSI; the example ends with the pattern and the trigger fires.
+        let spi = SpiConfig::default();
+        let items = crate::setup::parse_word_pattern("12 * AX", 8).unwrap();
+        let t = ProtocolTrigger::Spi(spi, SpiMatch::pattern(SpiLane::Mosi, items, false));
+        let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
+        let w = words(&p, 0);
+        assert_eq!(&w[1..], &[0x12, 0xD1, 0xD1, 0xA5]);
+        assert_eq!(p.trigger, Some(p.lanes[0].1.last().unwrap().end as f64));
+        // I2C: a register write whose value is not acknowledged; START and STOP are added.
+        let i2c = bf_decode::i2c::I2cConfig::default();
+        for text in ["@50W 01 XX!", "S @50W 01 XX! P", "Sr @48R", "3C *  P"] {
+            let items = crate::setup::parse_i2c_pattern(text).unwrap();
+            let t = ProtocolTrigger::I2c(i2c.clone(), I2cMatch::pattern(items, false));
+            let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
+            assert!(p.trigger.is_some(), "{text}: {:?}", p.caption);
+            assert_eq!(p.bit_labels.first().unwrap().2, "S", "{text}");
+            assert_eq!(p.bit_labels.last().unwrap().2, "P", "{text}");
+        }
+        // Only the alternative: a NAKed byte.
+        let p = build_trigger(
+            &ProtocolTrigger::I2c(i2c, I2cMatch::nak()),
+            TriggerAt::End,
+            &[],
+        )
+        .unwrap();
+        assert!(p.trigger.is_some());
+    }
+
+    #[test]
     fn trigger_example_for_uart_errors_spi_words_and_i2c() {
         let t = ProtocolTrigger::Uart(uart_cfg(), UartMatch::Error);
         let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
@@ -828,14 +962,7 @@ mod tests {
         assert_eq!(p.trigger, Some(chars[1].end as f64));
 
         let spi = SpiConfig::default();
-        let t = ProtocolTrigger::Spi(
-            spi.clone(),
-            SpiMatch::Word {
-                lane: SpiLane::Mosi,
-                value: 0xA5,
-                care: 0xF0,
-            },
-        );
+        let t = ProtocolTrigger::Spi(spi.clone(), SpiMatch::word(SpiLane::Mosi, 0xA5, 0xF0));
         let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
         let w = words(&p, 0);
         assert_eq!(w.len(), 2);
@@ -845,23 +972,24 @@ mod tests {
 
         let i2c = bf_decode::i2c::I2cConfig::default();
         for m in [
-            I2cMatch::Start,
-            I2cMatch::Stop,
-            I2cMatch::Nak,
-            I2cMatch::Data(0x7E),
-            I2cMatch::Address {
-                addr: 0x23,
-                read: Some(true),
-            },
+            I2cMatch::start(),
+            I2cMatch::stop(),
+            I2cMatch::nak(),
+            I2cMatch::data(0x7E),
+            I2cMatch::address(0x23, Some(true)),
         ] {
-            let p =
-                build_trigger(&ProtocolTrigger::I2c(i2c.clone(), m), TriggerAt::End, &[]).unwrap();
+            let p = build_trigger(
+                &ProtocolTrigger::I2c(i2c.clone(), m.clone()),
+                TriggerAt::End,
+                &[],
+            )
+            .unwrap();
             assert!(p.trigger.is_some(), "{m:?}");
         }
         // Unusable settings: no example.
         let same = bf_decode::i2c::I2cConfig { scl: 1, sda: 1 };
         assert!(build_trigger(
-            &ProtocolTrigger::I2c(same, I2cMatch::Start),
+            &ProtocolTrigger::I2c(same, I2cMatch::start()),
             TriggerAt::End,
             &[]
         )

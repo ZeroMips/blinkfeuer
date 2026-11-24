@@ -60,6 +60,7 @@ pub enum UartWhat {
     Error,
 }
 
+/// What the I2C trigger of older versions looked for (only read from old setups).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum I2cWhat {
     Start,
@@ -68,26 +69,6 @@ pub enum I2cWhat {
     Address,
     Nak,
     Data,
-}
-
-impl I2cWhat {
-    pub const ALL: [I2cWhat; 5] = [
-        I2cWhat::Start,
-        I2cWhat::Stop,
-        I2cWhat::Address,
-        I2cWhat::Nak,
-        I2cWhat::Data,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            I2cWhat::Start => "START condition",
-            I2cWhat::Stop => "STOP condition",
-            I2cWhat::Address => "Address",
-            I2cWhat::Nak => "Not acknowledged",
-            I2cWhat::Data => "Data byte",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,15 +102,29 @@ pub struct ProtocolSetup {
     pub spi: SpiConfig,
     pub spi_source: Option<u32>,
     pub spi_miso: bool,
-    /// Word and the bits that have to match (hex).
-    pub spi_value: String,
-    pub spi_care: String,
+    /// Words to look for: hex with X for free nibbles, 0b... for single bits, * for any words in
+    /// between.
+    pub spi_pattern: String,
+    /// Also fire on a word cut short by the end of the transaction.
+    pub spi_or_incomplete: bool,
     pub i2c: I2cConfig,
     pub i2c_source: Option<u32>,
-    pub i2c_what: I2cWhat,
-    /// Address or data byte (hex).
-    pub i2c_value: String,
-    pub i2c_dir: Direction,
+    /// What to look for: S, Sr, P, addresses (@50, @50W, @50R), data bytes, ! after an address or
+    /// byte for "not acknowledged", X for free nibbles, * for anything in between.
+    pub i2c_pattern: String,
+    /// Also fire on any byte that was not acknowledged.
+    pub i2c_or_nak: bool,
+    /// Settings of older versions, turned into the patterns when a setup is read (never written).
+    #[serde(skip_serializing)]
+    pub spi_value: Option<String>,
+    #[serde(skip_serializing)]
+    pub spi_care: Option<String>,
+    #[serde(skip_serializing)]
+    pub i2c_what: Option<I2cWhat>,
+    #[serde(skip_serializing)]
+    pub i2c_value: Option<String>,
+    #[serde(skip_serializing)]
+    pub i2c_dir: Option<Direction>,
     /// Which sample of the match is the trigger sample.
     pub trigger_at: TriggerAt,
 }
@@ -155,23 +150,27 @@ impl Default for ProtocolSetup {
             },
             spi_source: None,
             spi_miso: false,
-            spi_value: "A5".into(),
-            spi_care: "FF".into(),
+            spi_pattern: "A5".into(),
+            spi_or_incomplete: false,
             i2c: I2cConfig { scl: 4, sda: 5 },
             i2c_source: None,
-            i2c_what: I2cWhat::Address,
-            i2c_value: "50".into(),
-            i2c_dir: Direction::Any,
+            i2c_pattern: "@50".into(),
+            i2c_or_nak: false,
+            spi_value: None,
+            spi_care: None,
+            i2c_what: None,
+            i2c_value: None,
+            i2c_dir: None,
             trigger_at: TriggerAt::End,
         }
     }
 }
 
 /// One hex digit, or `X` for a free nibble: (value, care).
-fn nibble(c: char) -> Option<(u16, u16)> {
+fn nibble(c: char) -> Option<(u32, u32)> {
     match c {
         'X' | 'x' => Some((0, 0)),
-        _ => c.to_digit(16).map(|v| (v as u16, 0xF)),
+        _ => c.to_digit(16).map(|v| (v, 0xF)),
     }
 }
 
@@ -195,7 +194,7 @@ pub fn parse_hex_pattern(text: &str) -> Result<Vec<PatItem>, String> {
             if b.is_empty() || b.len() > 9 {
                 return Err(format!("{token}: 1 to 9 bits after 0b"));
             }
-            let (mut value, mut care) = (0u16, 0u16);
+            let (mut value, mut care) = (0u32, 0u32);
             for c in b.chars() {
                 let (v, k) = match c {
                     '0' => (0, 1),
@@ -286,13 +285,13 @@ pub fn format_hex_pattern(items: &[PatItem]) -> String {
     items
         .iter()
         .map(|it| match *it {
-            PatItem::Gap => "*".to_string(),
+            // (I2C items do not occur in UART patterns.)
             PatItem::Char { value, care } => {
                 let (care8, nine) = (
                     care & 0xFF,
                     value & care & 0x100 != 0 || care & 0x100 != 0 && care & 0xFF != 0xFF,
                 );
-                let nib = |shift: u16| {
+                let nib = |shift: u32| {
                     if care8 >> shift & 0xF == 0xF {
                         format!("{:X}", value >> shift & 0xF)
                     } else {
@@ -315,6 +314,7 @@ pub fn format_hex_pattern(items: &[PatItem]) -> String {
                     format!("0b{bits}")
                 }
             }
+            _ => "*".to_string(),
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -346,9 +346,205 @@ pub fn format_text_pattern(items: &[PatItem]) -> Option<String> {
                     return None;
                 }
             }
+            _ => return None,
         }
     }
     Some(s)
+}
+
+/// One value of a pattern: hex digits with X for free nibbles (optionally after 0x), or 0b with bits
+/// and X for free bits. Returns (value, care, bits typed); the bits above those typed are 0.
+fn parse_value(token: &str) -> Result<(u32, u32, u32), String> {
+    if let Some(b) = token
+        .strip_prefix("0b")
+        .or_else(|| token.strip_prefix("0B"))
+    {
+        if b.is_empty() || b.len() > 32 {
+            return Err(format!("{token}: 1 to 32 bits after 0b"));
+        }
+        let (mut value, mut care) = (0u32, 0u32);
+        for c in b.chars() {
+            let (v, k) = match c {
+                '0' => (0, 1),
+                '1' => (1, 1),
+                'X' | 'x' => (0, 0),
+                _ => return Err(format!("{token}: bits are 0, 1 or X")),
+            };
+            value = value << 1 | v;
+            care = care << 1 | k;
+        }
+        return Ok((value, care, b.len() as u32));
+    }
+    let t = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+        .unwrap_or(token);
+    if t.is_empty() || t.len() > 8 {
+        return Err(format!(
+            "'{token}' is not a hex value (1 to 8 digits, X: any nibble)"
+        ));
+    }
+    let (mut value, mut care) = (0u32, 0u32);
+    for c in t.chars() {
+        let (v, k) =
+            nibble(c).ok_or_else(|| format!("'{token}' is not a hex value (X: any nibble)"))?;
+        value = value << 4 | v;
+        care = care << 4 | k;
+    }
+    Ok((value, care, 4 * t.len() as u32))
+}
+
+/// `care` with the bits above the `typed` ones fixed (they are 0), within `width` bits.
+fn fix_high_bits(care: u32, typed: u32, width: u32) -> u32 {
+    let full = |n: u32| if n >= 32 { u32::MAX } else { (1u32 << n) - 1 };
+    care | full(width) & !full(typed)
+}
+
+/// An SPI pattern: one word per token (hex with X for free nibbles, or 0b... with X for free bits;
+/// the bits above those typed are 0) and * for any words in between.
+pub fn parse_word_pattern(text: &str, bits: u32) -> Result<Vec<PatItem>, String> {
+    text.split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| !t.is_empty())
+        .map(|token| {
+            if token == "*" {
+                return Ok(PatItem::Gap);
+            }
+            let (value, care, typed) = parse_value(token)?;
+            Ok(PatItem::Char {
+                value,
+                care: fix_high_bits(care, typed, bits),
+            })
+        })
+        .collect()
+}
+
+/// An I2C pattern: S (any START), Sr (repeated START), P (STOP), addresses @50 / @50W / @50R, data
+/// bytes, ! after an address or byte for "not acknowledged", X for free nibbles (0b... for single
+/// bits) and * for anything in between. Letters may be lower case.
+pub fn parse_i2c_pattern(text: &str) -> Result<Vec<PatItem>, String> {
+    let mut out = Vec::new();
+    for token in text
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| !t.is_empty())
+    {
+        match token.to_ascii_uppercase().as_str() {
+            "*" => out.push(PatItem::Gap),
+            "S" => out.push(PatItem::Start { repeated: false }),
+            "SR" => out.push(PatItem::Start { repeated: true }),
+            "P" => out.push(PatItem::Stop),
+            _ => {
+                let (body, nak) = match token.strip_suffix('!') {
+                    Some(b) => (b, true),
+                    None => (token, false),
+                };
+                if let Some(addr) = body.strip_prefix('@') {
+                    let (addr, read) = match addr.chars().last() {
+                        Some('W' | 'w') => (&addr[..addr.len() - 1], Some(false)),
+                        Some('R' | 'r') => (&addr[..addr.len() - 1], Some(true)),
+                        _ => (addr, None),
+                    };
+                    let (value, care, typed) =
+                        parse_value(addr).map_err(|e| format!("address: {e}"))?;
+                    out.push(PatItem::Address {
+                        value,
+                        care: fix_high_bits(care, typed, 8),
+                        read,
+                        nak,
+                    });
+                } else {
+                    let (value, care, typed) = parse_value(body)?;
+                    let care = fix_high_bits(care, typed, 8);
+                    out.push(if nak {
+                        PatItem::CharNak { value, care }
+                    } else {
+                        PatItem::Char { value, care }
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A value in `width` bits: hex digits with X if every nibble is either free or fixed, else 0b with
+/// one character per bit.
+fn format_value(value: u32, care: u32, width: u32) -> String {
+    let full = if width >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << width) - 1
+    };
+    let care = care & full;
+    let digits = width.div_ceil(4);
+    let aligned = (0..digits).all(|d| {
+        matches!(care >> (4 * d) & 0xF, 0 | 0xF)
+            || (care >> (4 * d) & 0xF) == (full >> (4 * d) & 0xF)
+    });
+    if aligned {
+        (0..digits)
+            .rev()
+            .map(|d| {
+                if care >> (4 * d) & 0xF == 0 {
+                    "X".to_string()
+                } else {
+                    format!("{:X}", value >> (4 * d) & 0xF)
+                }
+            })
+            .collect()
+    } else {
+        let bits: String = (0..width)
+            .rev()
+            .map(|i| match (care >> i & 1, value >> i & 1) {
+                (0, _) => 'X',
+                (_, 1) => '1',
+                _ => '0',
+            })
+            .collect();
+        format!("0b{bits}")
+    }
+}
+
+/// An SPI pattern in the notation of [`parse_word_pattern`] for `bits`-bit words.
+pub fn format_word_pattern(items: &[PatItem], bits: u32) -> String {
+    items
+        .iter()
+        .map(|it| match *it {
+            PatItem::Char { value, care } => format_value(value, care, bits),
+            _ => "*".into(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// An I2C pattern in the notation of [`parse_i2c_pattern`].
+pub fn format_i2c_pattern(items: &[PatItem]) -> String {
+    items
+        .iter()
+        .map(|it| match *it {
+            PatItem::Start { repeated: false } => "S".into(),
+            PatItem::Start { repeated: true } => "Sr".into(),
+            PatItem::Stop => "P".into(),
+            PatItem::Gap => "*".into(),
+            PatItem::Char { value, care } => format_value(value, care, 8),
+            PatItem::CharNak { value, care } => format!("{}!", format_value(value, care, 8)),
+            PatItem::Address {
+                value,
+                care,
+                read,
+                nak,
+            } => format!(
+                "@{}{}{}",
+                format_value(value, care, 8),
+                match read {
+                    Some(false) => "W",
+                    Some(true) => "R",
+                    None => "",
+                },
+                if nak { "!" } else { "" }
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn parse_hex_u32(text: &str) -> Result<u32, String> {
@@ -360,6 +556,40 @@ pub fn parse_hex_u32(text: &str) -> Result<u32, String> {
 }
 
 impl ProtocolSetup {
+    /// Turn the SPI and I2C settings of older versions (one value, a care mask, an I2C "what") into
+    /// the patterns that mean the same.
+    pub fn upgrade(&mut self) {
+        if let Some(v) = self.spi_value.take() {
+            let care = self.spi_care.take().unwrap_or_else(|| "FFFFFFFF".into());
+            self.spi_pattern = match (parse_hex_u32(&v), parse_hex_u32(&care)) {
+                (Ok(value), Ok(care)) => {
+                    format_word_pattern(&[PatItem::Char { value, care }], self.spi.bits as u32)
+                }
+                _ => v,
+            };
+        }
+        if let Some(what) = self.i2c_what.take() {
+            let value = self
+                .i2c_value
+                .take()
+                .unwrap_or_default()
+                .trim()
+                .to_uppercase();
+            let dir = match self.i2c_dir.take().unwrap_or_default() {
+                Direction::Any => "",
+                Direction::Read => "R",
+                Direction::Write => "W",
+            };
+            (self.i2c_pattern, self.i2c_or_nak) = match what {
+                I2cWhat::Start => ("S".into(), false),
+                I2cWhat::Stop => ("P".into(), false),
+                I2cWhat::Nak => (String::new(), true),
+                I2cWhat::Data => (value, false),
+                I2cWhat::Address => (format!("@{value}{dir}"), false),
+            };
+        }
+    }
+
     /// The typed UART pattern.
     pub fn uart_pattern(&self) -> Result<Vec<PatItem>, String> {
         if self.uart_ascii {
@@ -432,40 +662,21 @@ impl ProtocolSetup {
                 ProtocolTrigger::Uart(self.uart.clone(), what)
             }
             TriggerMode::Spi => {
-                let value = parse_hex_u32(&self.spi_value)?;
-                let care = parse_hex_u32(&self.spi_care)?;
                 let lane = if self.spi_miso {
                     SpiLane::Miso
                 } else {
                     SpiLane::Mosi
                 };
-                ProtocolTrigger::Spi(self.spi.clone(), SpiMatch::Word { lane, value, care })
+                let items = parse_word_pattern(&self.spi_pattern, self.spi.bits as u32)?;
+                ProtocolTrigger::Spi(
+                    self.spi.clone(),
+                    SpiMatch::pattern(lane, items, self.spi_or_incomplete),
+                )
             }
-            TriggerMode::I2c => {
-                let byte = |s: &str| -> Result<u8, String> {
-                    let v = parse_hex_u32(s)?;
-                    u8::try_from(v).map_err(|_| format!("{v:X} does not fit in a byte"))
-                };
-                let what = match self.i2c_what {
-                    I2cWhat::Start => I2cMatch::Start,
-                    I2cWhat::Stop => I2cMatch::Stop,
-                    I2cWhat::Nak => I2cMatch::Nak,
-                    I2cWhat::Data => I2cMatch::Data(byte(&self.i2c_value)?),
-                    I2cWhat::Address => {
-                        let addr = byte(&self.i2c_value)?;
-                        if addr > 0x7f {
-                            return Err("an I2C address has 7 bits (00 to 7F)".into());
-                        }
-                        let read = match self.i2c_dir {
-                            Direction::Any => None,
-                            Direction::Read => Some(true),
-                            Direction::Write => Some(false),
-                        };
-                        I2cMatch::Address { addr, read }
-                    }
-                };
-                ProtocolTrigger::I2c(self.i2c.clone(), what)
-            }
+            TriggerMode::I2c => ProtocolTrigger::I2c(
+                self.i2c.clone(),
+                I2cMatch::pattern(parse_i2c_pattern(&self.i2c_pattern)?, self.i2c_or_nak),
+            ),
         };
         t.check()?;
         Ok(Some(t))
@@ -483,22 +694,18 @@ impl ProtocolSetup {
                 UartWhat::Error => "UART error".into(),
             },
             TriggerMode::Spi => format!(
-                "SPI {} = {}",
+                "SPI {} {}{}",
                 if self.spi_miso { "MISO" } else { "MOSI" },
-                self.spi_value
+                self.spi_pattern,
+                if self.spi_or_incomplete {
+                    " or incomplete"
+                } else {
+                    ""
+                }
             ),
-            TriggerMode::I2c => match self.i2c_what {
-                I2cWhat::Address => format!(
-                    "I2C address {}{}",
-                    self.i2c_value,
-                    match self.i2c_dir {
-                        Direction::Any => "",
-                        Direction::Read => " R",
-                        Direction::Write => " W",
-                    }
-                ),
-                I2cWhat::Data => format!("I2C data {}", self.i2c_value),
-                other => format!("I2C {}", other.label()),
+            TriggerMode::I2c => match (self.i2c_pattern.trim(), self.i2c_or_nak) {
+                ("", true) => "I2C NAK".into(),
+                (p, nak) => format!("I2C {p}{}", if nak { " or NAK" } else { "" }),
             },
         }
     }
@@ -597,6 +804,7 @@ impl TriggerSetup {
     /// Fit a setup read from a file: 32 conditions, finite non-negative spans.
     pub fn sanitized(mut self) -> Self {
         self.conds.resize(32, Cond::X);
+        self.protocol.upgrade();
         for sp in [&mut self.pre, &mut self.post] {
             if !sp.value.is_finite() || sp.value < 0.0 {
                 sp.value = 0.0;
@@ -989,7 +1197,12 @@ mod tests {
             ))
         );
         p.uart_bytes.clear();
-        assert!(p.build(TriggerMode::Uart).is_err());
+        assert!(
+            p.build(TriggerMode::Uart).is_ok(),
+            "nothing typed, but errors"
+        );
+        p.uart_or_error = false;
+        assert!(p.build(TriggerMode::Uart).is_err(), "nothing to look for");
         p.uart_what = UartWhat::Error;
         assert!(p.build(TriggerMode::Uart).is_ok());
         // SPI needs the line it looks at.
@@ -998,28 +1211,147 @@ mod tests {
         assert!(p.build(TriggerMode::Spi).is_err(), "MISO has no channel");
         p.spi.miso = Some(4);
         assert!(p.build(TriggerMode::Spi).is_ok());
-        p.spi_value = "XYZ".into();
+        p.spi_pattern = "XYZ".into();
         assert!(p.build(TriggerMode::Spi).is_err());
-        // I2C: addresses have 7 bits.
-        p.i2c_value = "80".into();
+        p.spi_pattern = "12 * AX".into();
+        p.spi_or_incomplete = true;
+        assert_eq!(
+            p.build(TriggerMode::Spi).unwrap(),
+            Some(ProtocolTrigger::Spi(
+                p.spi.clone(),
+                SpiMatch::pattern(
+                    SpiLane::Miso,
+                    vec![
+                        PatItem::Char {
+                            value: 0x12,
+                            care: 0xFF
+                        },
+                        PatItem::Gap,
+                        PatItem::Char {
+                            value: 0xA0,
+                            care: 0xF0
+                        }
+                    ],
+                    true
+                )
+            ))
+        );
+        // I2C: addresses have 7 bits, bytes 8.
+        p.i2c_pattern = "@80".into();
         assert!(p.build(TriggerMode::I2c).is_err());
-        p.i2c_value = "7F".into();
-        p.i2c_dir = Direction::Read;
+        p.i2c_pattern = "@7FR".into();
         assert_eq!(
             p.build(TriggerMode::I2c).unwrap(),
             Some(ProtocolTrigger::I2c(
                 p.i2c.clone(),
-                I2cMatch::Address {
-                    addr: 0x7f,
-                    read: Some(true)
-                }
+                I2cMatch::address(0x7f, Some(true))
             ))
         );
-        p.i2c_what = I2cWhat::Data;
-        p.i2c_value = "FF".into();
+        p.i2c_pattern = "FF".into();
         assert!(p.build(TriggerMode::I2c).is_ok());
-        p.i2c_value = "1FF".into();
+        p.i2c_pattern = "1FF".into();
         assert!(p.build(TriggerMode::I2c).is_err());
+        p.i2c_pattern.clear();
+        assert!(p.build(TriggerMode::I2c).is_err(), "nothing to look for");
+        p.i2c_or_nak = true;
+        assert!(p.build(TriggerMode::I2c).is_ok(), "only NAKs");
+    }
+
+    #[test]
+    fn spi_and_i2c_patterns_are_parsed() {
+        let ch = |value, care| PatItem::Char { value, care };
+        // SPI: one word per entry; bits above those typed are 0.
+        assert_eq!(
+            parse_word_pattern("A5 x3 * 0b1X 12AB", 16).unwrap(),
+            vec![
+                ch(0xA5, 0xFFFF),
+                ch(0x03, 0xFF0F),
+                PatItem::Gap,
+                ch(0b10, 0xFFFE),
+                ch(0x12AB, 0xFFFF)
+            ]
+        );
+        assert!(
+            parse_word_pattern("G1", 8).is_err() && parse_word_pattern("123456789", 32).is_err()
+        );
+        assert_eq!(
+            format_word_pattern(&parse_word_pattern("AX 3C * 0b1X0XXXXX", 8).unwrap(), 8),
+            "AX 3C * 0b1X0XXXXX"
+        );
+        assert_eq!(format_word_pattern(&[ch(0x12AB, 0xFF0F)], 16), "12XB");
+        // I2C: conditions, addresses with direction, bytes, NAK, wildcards, any case.
+        assert_eq!(
+            parse_i2c_pattern("S @50W 01 xx! sr @4xr P *").unwrap(),
+            vec![
+                PatItem::Start { repeated: false },
+                PatItem::Address {
+                    value: 0x50,
+                    care: 0xFF,
+                    read: Some(false),
+                    nak: false
+                },
+                ch(0x01, 0xFF),
+                PatItem::CharNak { value: 0, care: 0 },
+                PatItem::Start { repeated: true },
+                PatItem::Address {
+                    value: 0x40,
+                    care: 0xF0,
+                    read: Some(true),
+                    nak: false
+                },
+                PatItem::Stop,
+                PatItem::Gap
+            ]
+        );
+        assert_eq!(
+            parse_i2c_pattern("@50!").unwrap(),
+            vec![PatItem::Address {
+                value: 0x50,
+                care: 0xFF,
+                read: None,
+                nak: true
+            }]
+        );
+        assert!(parse_i2c_pattern("@").is_err() && parse_i2c_pattern("Q").is_err());
+        for text in ["S @50W 01 XX! Sr @4XR P", "@5X * P", "3C! 0b1X0XXXXX"] {
+            assert_eq!(format_i2c_pattern(&parse_i2c_pattern(text).unwrap()), text);
+        }
+    }
+
+    #[test]
+    fn old_spi_and_i2c_settings_become_patterns() {
+        let load = |json: serde_json::Value| {
+            let t: TriggerSetup =
+                serde_json::from_value(serde_json::json!({ "protocol": json })).unwrap();
+            t.sanitized().protocol
+        };
+        let p = load(serde_json::json!({"spi_value": "A5", "spi_care": "F0"}));
+        assert_eq!(p.spi_pattern, "AX");
+        assert!(p.spi_value.is_none() && p.spi_care.is_none());
+        let p = load(serde_json::json!({"spi_value": "A5", "spi_care": "FF"}));
+        assert_eq!(p.spi_pattern, "A5");
+        for (what, value, dir, pattern, nak) in [
+            ("Address", "50", "Any", "@50", false),
+            ("Address", "48", "Read", "@48R", false),
+            ("Address", "3c", "Write", "@3CW", false),
+            ("Data", "7E", "Any", "7E", false),
+            ("Start", "50", "Any", "S", false),
+            ("Stop", "50", "Any", "P", false),
+            ("Nak", "50", "Any", "", true),
+        ] {
+            let p = load(serde_json::json!({"i2c_what": what, "i2c_value": value, "i2c_dir": dir}));
+            assert_eq!(
+                (p.i2c_pattern.as_str(), p.i2c_or_nak),
+                (pattern, nak),
+                "{what}"
+            );
+        }
+        // New setups write no old fields, and keep their patterns.
+        let mut p = ProtocolSetup::default();
+        p.i2c_pattern = "S @50W".into();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("i2c_what").is_none() && json.get("spi_value").is_none());
+        assert_eq!(load(json).i2c_pattern, "S @50W");
     }
 
     #[test]
@@ -1029,7 +1361,7 @@ mod tests {
             mode: TriggerMode::Spi,
             ..Default::default()
         };
-        t.protocol.spi_value = "3C".into();
+        t.protocol.spi_pattern = "3C".into();
         let back: TriggerSetup = serde_json::from_value(serde_json::to_value(&t).unwrap()).unwrap();
         assert!(back == t);
         // A file from before protocol triggers existed has none of the new fields.
@@ -1042,7 +1374,7 @@ mod tests {
                 && old.mode == TriggerMode::Pattern
                 && old.protocol == ProtocolSetup::default()
         );
-        assert!(t.summary(&[]).contains("SPI MOSI = 3C"));
+        assert!(t.summary(&[]).contains("SPI MOSI 3C"));
     }
 
     #[test]

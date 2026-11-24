@@ -54,9 +54,10 @@ A working first version. What is verified and what is not:
   values and CRC, with requests and responses told apart where the function allows it.
 - **Annotation table** of decoded items with search; clicking in the table moves the waveform and vice versa.
 - **Triggers** (done on the host, the analyzer has none in hardware): level and edge conditions on any
-  channels, or a protocol trigger (UART text or bytes with X for free nibbles or bits and * for anything
-  in between, optionally or on any error; SPI word with a bit mask; I2C address, START/STOP, NAK, data
-  byte), with the trigger point at the start or the end of the match. Pre-trigger and
+  channels, or a protocol trigger with a pattern: UART text or bytes, SPI words, or I2C events (S, Sr,
+  P, @50W addresses, data bytes, ! for NAK), each with X for free nibbles or bits and * for anything in
+  between, optionally also firing on the protocol's error (UART framing/parity error, incomplete SPI
+  word, I2C NAK); the trigger point is the start or the end of the match. Pre-trigger and
   post-trigger are set separately in samples or time, times can be shown relative to the trigger, and a
   triggered capture stops instead of dropping data when memory is full.
 - **Measurements** (View menu): edges, frequency, period, duty cycle and the shortest, mean and longest
