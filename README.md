@@ -9,10 +9,10 @@ changes, so quiet signals cost almost no memory.
 
 *Blinkfeuer* is the old German word for a flashing beacon, the light that tells you something is out there.
 
-![Blinkfeuer showing a triggered capture of the simulator: UART, SPI and I2C decoded, with markers and the table of decoded items](docs/screenshot.png)
+![Blinkfeuer showing a triggered capture of the simulator: UART, SPI and I2C decoded, with markers and the decode table](docs/screenshot.png)
 
 The screenshot shows a capture of the built-in simulator, triggered on the UART text "sim 0" (the orange **T**), with
-the UART characters grouped into a telegram, SPI words, I2C transactions, two markers and the table of decoded items.
+the UART characters grouped into a telegram, SPI words, I2C transactions, two markers and the decode table.
 Times are counted from the trigger.
 
 It is made for the [Sipeed SLogic16U3](https://wiki.sipeed.com/hardware/en/logic_analyzer/slogic16u3/slogic16u3.html)
@@ -52,7 +52,7 @@ A working first version. What is verified and what is not:
 - **Modbus RTU** on top of the UART decoder: frames found by the pause between them and checked by their
   CRC (also when a device answers too fast), each frame split into address, function, registers,
   values and CRC, with requests and responses told apart where the function allows it.
-- **Annotation table** of decoded items with search; clicking in the table moves the waveform and vice versa.
+- **Decode table** of the decoded items with search; clicking in the table moves the waveform and vice versa.
 - **Triggers** (done on the host, the analyzer has none in hardware): level and edge conditions on any
   channels, or a protocol trigger with a pattern: UART text or bytes, SPI words, or I2C events (S, Sr,
   P, @50W addresses, data bytes, ! for NAK), each with X for free nibbles or bits and * for anything in

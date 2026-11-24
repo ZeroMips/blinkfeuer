@@ -736,10 +736,7 @@ impl App {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .checkbox(&mut self.show_table, "Annotation table")
-                    .clicked()
-                {
+                if ui.checkbox(&mut self.show_table, "Decode table").clicked() {
                     ui.close_menu();
                 }
                 if ui
@@ -2638,11 +2635,11 @@ impl App {
                             ("Ctrl+Up / Down", "taller / shorter rows"),
                             (
                                 "Click a decoded item",
-                                "select it, mark its span, show it in the table",
+                                "select it, mark its span, show it in the decode table",
                             ),
                             (
                                 "Ctrl+F, F3 / Shift+F3",
-                                "search the table, next / previous row",
+                                "search the decode table, next / previous row",
                             ),
                         ] {
                             ui.label(RichText::new(k).color(theme::TEXT_DIM));

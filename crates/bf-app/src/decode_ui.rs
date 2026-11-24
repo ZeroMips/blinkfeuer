@@ -85,7 +85,7 @@ pub struct Entry {
 
 /// Hover help for the parameters of each decoder.
 mod help {
-    pub const NAME: &str = "Name shown in the waveform rows and the annotation table.";
+    pub const NAME: &str = "Name shown in the waveform rows and the decode table.";
     pub const FORMAT: &str = "How data values are displayed: hexadecimal, decimal, binary or ASCII (characters; control codes as \\r, \\n ...). Only changes the display, not the decoding.";
 
     pub const UART_RX: &str = "Channel that carries the serial data. Connect it to the TX pin of the device under test. The line idles high (low if 'Inverted' is on).";
@@ -96,7 +96,7 @@ mod help {
     pub const UART_PARITY: &str = "Extra bit after the data bits. Even/Odd: the number of 1 bits including the parity bit is even/odd. Mark: always 1. Space: always 0. A wrong parity bit is flagged PE; the byte is still shown.";
     pub const UART_STOP: &str = "Length of the idle period that ends a frame: 1, 1.5 or 2 bit times. The decoder checks the first stop bit: a low level there is a framing error (FE).";
     pub const UART_LSB: &str = "UART sends the least significant bit first. Turn this off for the rare links that send the most significant bit first.";
-    pub const UART_TELEGRAMS: &str = "Characters that follow each other closely are joined into one telegram: a bar on the 'Telegram' row showing the whole text, and one line in the annotation table (searchable by text).";
+    pub const UART_TELEGRAMS: &str = "Characters that follow each other closely are joined into one telegram: a bar on the 'Telegram' row showing the whole text, and one line in the decode table (searchable by text).";
     pub const UART_GAP: &str = "A telegram ends when the line has been idle this long, in bit times or in characters (a character is start, data, parity and stop bits: 10 bit times for 8N1, 11 for 8E1). Changing the unit converts the value. The default of 24 bit times is about 2.4 characters; use a larger gap for slow senders. Click the number to type it, or drag it.";
     pub const UART_PROTOCOL: &str = "What the characters carry. None: plain characters, optionally joined into telegrams. Modbus RTU: frames are found by the pause between them (3.5 characters, 1.75 ms above 19200 baud) and checked by their CRC; each frame is shown on the 'Frame' row and split into address, function, registers, values and CRC on the 'Fields' row. Modbus RTU usually runs 8E1 (even parity) or 8N2.";
     pub const UART_LF: &str = "Only offered while the values are shown as ASCII. Also end a telegram right after a line feed (0x0A), as in line-based text protocols such as NMEA or console output.";

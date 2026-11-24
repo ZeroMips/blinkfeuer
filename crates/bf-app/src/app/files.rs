@@ -735,7 +735,7 @@ impl App {
                 idle && !self.decoders.is_empty(),
                 egui::Button::new("Export decoded items (CSV)..."),
             )
-            .on_hover_text("The decoder and lane shown in the annotation table")
+            .on_hover_text("The decoder and lane shown in the decode table")
             .clicked()
         {
             ask = Some(Purpose::ExportCsv);
