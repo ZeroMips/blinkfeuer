@@ -98,20 +98,29 @@ pub enum Direction {
 
 /// Protocol trigger settings. Values are kept as the text the user typed and parsed when a capture
 /// starts, so an unfinished entry is never lost.
+///
+/// Each protocol can take its settings from a decoder (`*_source`: the decoder's id) instead of its
+/// own copy; [`ProtocolSetup::resolved`] puts the decoder's settings in. The own settings are kept
+/// (and saved with the decoder's settings filled in), so the trigger still works when the decoder is
+/// gone.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProtocolSetup {
     pub uart: UartConfig,
+    /// Take the UART settings from this decoder.
+    pub uart_source: Option<u32>,
     pub uart_what: UartWhat,
     /// Bytes to look for, as hex ("48 65 6C") or, with `uart_ascii`, as text with `\r \n \xNN` escapes.
     pub uart_bytes: String,
     pub uart_ascii: bool,
     pub spi: SpiConfig,
+    pub spi_source: Option<u32>,
     pub spi_miso: bool,
     /// Word and the bits that have to match (hex).
     pub spi_value: String,
     pub spi_care: String,
     pub i2c: I2cConfig,
+    pub i2c_source: Option<u32>,
     pub i2c_what: I2cWhat,
     /// Address or data byte (hex).
     pub i2c_value: String,
@@ -127,6 +136,7 @@ impl Default for ProtocolSetup {
                 rx: 0,
                 ..Default::default()
             },
+            uart_source: None,
             uart_what: UartWhat::Bytes,
             uart_bytes: "sim 0".into(),
             uart_ascii: true,
@@ -137,10 +147,12 @@ impl Default for ProtocolSetup {
                 miso: None,
                 ..Default::default()
             },
+            spi_source: None,
             spi_miso: false,
             spi_value: "A5".into(),
             spi_care: "FF".into(),
             i2c: I2cConfig { scl: 4, sda: 5 },
+            i2c_source: None,
             i2c_what: I2cWhat::Address,
             i2c_value: "50".into(),
             i2c_dir: Direction::Any,
@@ -213,6 +225,57 @@ impl ProtocolSetup {
             parse_ascii_bytes(&self.uart_bytes)
         } else {
             parse_hex_bytes(&self.uart_bytes)
+        }
+    }
+
+    /// These settings with the linked decoders' settings put in (`decoders`: id and settings). A link
+    /// to a decoder that is missing or of another kind is ignored: the own settings apply.
+    pub fn resolved(&self, decoders: &[(u32, Config)]) -> ProtocolSetup {
+        let mut p = self.clone();
+        let find = |src: Option<u32>| {
+            src.and_then(|id| decoders.iter().find(|(d, _)| *d == id).map(|(_, c)| c))
+        };
+        if let Some(Config::Uart(c)) = find(self.uart_source) {
+            p.uart = c.clone();
+        }
+        if let Some(Config::Spi(c)) = find(self.spi_source) {
+            p.spi = c.clone();
+        }
+        if let Some(Config::I2c(c)) = find(self.i2c_source) {
+            p.i2c = c.clone();
+        }
+        p
+    }
+
+    /// Decoder `id` (with settings `cfg`) is going away: links to it end, keeping its settings as the
+    /// own ones.
+    pub fn unlink(&mut self, id: u32, cfg: &Config) {
+        match cfg {
+            Config::Uart(c) if self.uart_source == Some(id) => {
+                self.uart = c.clone();
+                self.uart_source = None;
+            }
+            Config::Spi(c) if self.spi_source == Some(id) => {
+                self.spi = c.clone();
+                self.spi_source = None;
+            }
+            Config::I2c(c) if self.i2c_source == Some(id) => {
+                self.i2c = c.clone();
+                self.i2c_source = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Decoder ids changed (a decoder was rebuilt, or a setup loaded): links follow; ids not in `map`
+    /// end their link.
+    pub fn map_sources(&mut self, map: &dyn Fn(u32) -> Option<u32>) {
+        for src in [
+            &mut self.uart_source,
+            &mut self.spi_source,
+            &mut self.i2c_source,
+        ] {
+            *src = src.and_then(map);
         }
     }
 
@@ -509,6 +572,65 @@ pub fn autosave_path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(dirs::config_dir)?;
     Some(base.join("blinkfeuer").join("setup.json"))
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn uart(baud: f64) -> Config {
+        Config::Uart(UartConfig {
+            baud,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn linked_settings_come_from_the_decoder() {
+        let mut p = ProtocolSetup::default();
+        let decoders = [
+            (7, uart(19_200.0)),
+            (8, Config::I2c(I2cConfig { scl: 0, sda: 1 })),
+        ];
+        assert_eq!(p.resolved(&decoders).uart.baud, p.uart.baud, "not linked");
+        p.uart_source = Some(7);
+        assert_eq!(p.resolved(&decoders).uart.baud, 19_200.0);
+        // A link to a missing decoder or one of another kind is ignored.
+        p.uart_source = Some(8);
+        assert_eq!(p.resolved(&decoders).uart, p.uart);
+        p.uart_source = Some(99);
+        assert_eq!(p.resolved(&decoders).uart, p.uart);
+        p.i2c_source = Some(8);
+        assert_eq!(p.resolved(&decoders).i2c, I2cConfig { scl: 0, sda: 1 });
+    }
+
+    #[test]
+    fn removing_the_decoder_keeps_its_settings() {
+        let mut p = ProtocolSetup {
+            uart_source: Some(7),
+            ..Default::default()
+        };
+        p.unlink(8, &uart(9_600.0));
+        assert_eq!(p.uart_source, Some(7), "another decoder");
+        p.unlink(7, &uart(19_200.0));
+        assert_eq!((p.uart_source, p.uart.baud), (None, 19_200.0));
+    }
+
+    #[test]
+    fn links_follow_new_ids_and_old_setups_have_none() {
+        let mut p = ProtocolSetup {
+            uart_source: Some(3),
+            spi_source: Some(4),
+            ..Default::default()
+        };
+        p.map_sources(&|id| (id == 3).then_some(30));
+        assert_eq!((p.uart_source, p.spi_source), (Some(30), None));
+        let old: ProtocolSetup = serde_json::from_str(r#"{"uart_bytes": "OK"}"#).unwrap();
+        assert_eq!(
+            (old.uart_source, old.spi_source, old.i2c_source),
+            (None, None, None)
+        );
+    }
 }
 
 #[cfg(test)]

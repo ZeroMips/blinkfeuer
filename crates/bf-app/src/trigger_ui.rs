@@ -11,6 +11,13 @@ use bf_decode::trigger::{ProtocolTrigger, TriggerAt};
 use bf_decode::Format;
 use egui::RichText;
 
+/// A decoder the protocol trigger can take its settings from.
+pub struct DecoderChoice {
+    pub id: u32,
+    pub label: String,
+    pub cfg: Config,
+}
+
 fn dim(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(RichText::new(text.into()).color(theme::TEXT_DIM));
 }
@@ -50,16 +57,20 @@ fn span_ui(ui: &mut egui::Ui, id: &str, span: &mut Span) {
         });
 }
 
+/// The Trigger window. Returns the id of a decoder whose settings the user wants to edit.
+#[allow(clippy::too_many_arguments)]
 pub fn contents(
     ui: &mut egui::Ui,
     t: &mut TriggerSetup,
     probe: &mut BaudProbe,
     memory_mib: &mut u64,
     names: &[String],
+    decoders: &[DecoderChoice],
     n: usize,
     rate: f64,
     continuous: bool,
-) {
+) -> Option<u32> {
+    let mut edit = None;
     ui.checkbox(
         &mut t.enabled,
         "Wait for the trigger before the capture ends",
@@ -73,11 +84,14 @@ pub fn contents(
     ui.separator();
     match t.mode {
         TriggerMode::Pattern => pattern(ui, t, names, n),
-        TriggerMode::Uart => uart(ui, t, probe, names),
-        TriggerMode::Spi => spi(ui, t, names),
-        TriggerMode::I2c => i2c(ui, t, names),
+        TriggerMode::Uart => uart(ui, t, probe, names, decoders, &mut edit),
+        TriggerMode::Spi => spi(ui, t, names, decoders, &mut edit),
+        TriggerMode::I2c => i2c(ui, t, names, decoders, &mut edit),
     }
-    example(ui, t, names);
+    // What the trigger will really use: linked decoders' settings put in.
+    let configs: Vec<(u32, Config)> = decoders.iter().map(|d| (d.id, d.cfg.clone())).collect();
+    let protocol = t.protocol.resolved(&configs);
+    example(ui, &protocol, t.mode, names);
     ui.separator();
     ui.label(
         RichText::new("How much to record")
@@ -150,7 +164,7 @@ pub fn contents(
                 "No condition set: the trigger fires as soon as the pre-trigger window is full.",
             );
         }
-        if let Err(e) = t.protocol.build(t.mode) {
+        if let Err(e) = protocol.build(t.mode) {
             ui.colored_label(theme::STOP, format!("This trigger cannot start: {e}"));
         }
         if t.pre.samples(rate) as f64 * 8.0 > *memory_mib as f64 * 1048576.0 {
@@ -160,19 +174,19 @@ pub fn contents(
             );
         }
     }
+    edit
 }
 
 /// For a protocol trigger: an example of what it looks for, with the trigger sample marked.
-fn example(ui: &mut egui::Ui, t: &TriggerSetup, names: &[String]) {
-    let Ok(Some(trigger)) = t.protocol.build(t.mode) else {
+fn example(ui: &mut egui::Ui, protocol: &ProtocolSetup, mode: TriggerMode, names: &[String]) {
+    let Ok(Some(trigger)) = protocol.build(mode) else {
         return;
     };
-    let Some(p) = crate::decode_preview::build_trigger(&trigger, t.protocol.trigger_at, names)
-    else {
+    let Some(p) = crate::decode_preview::build_trigger(&trigger, protocol.trigger_at, names) else {
         return;
     };
     let fmt = match trigger {
-        ProtocolTrigger::Uart(..) if t.protocol.uart_ascii => Format::Ascii,
+        ProtocolTrigger::Uart(..) if protocol.uart_ascii => Format::Ascii,
         _ => Format::Hex,
     };
     ui.add_space(6.0);
@@ -181,6 +195,60 @@ fn example(ui: &mut egui::Ui, t: &TriggerSetup, names: &[String]) {
     ui.add_space(2.0);
     for line in &p.caption {
         ui.label(RichText::new(line).color(theme::TEXT_DIM).size(11.0));
+    }
+}
+
+/// The decoder settings of a protocol trigger: its own (editable), or those of a decoder of the same
+/// kind (shown, edited in the decoder setup). Returns changed own settings.
+#[allow(clippy::too_many_arguments)]
+fn settings(
+    ui: &mut egui::Ui,
+    id: &str,
+    source: &mut Option<u32>,
+    own: Config,
+    names: &[String],
+    decoders: &[DecoderChoice],
+    probe: Option<&mut BaudProbe>,
+    edit: &mut Option<u32>,
+) -> Option<Config> {
+    let choices: Vec<&DecoderChoice> = decoders
+        .iter()
+        .filter(|d| d.cfg.kind() == own.kind())
+        .collect();
+    let linked = source.and_then(|s| choices.iter().find(|d| d.id == s).copied());
+    if !choices.is_empty() {
+        ui.horizontal(|ui| {
+            dim(ui, "Settings from");
+            egui::ComboBox::from_id_salt(format!("{id}_source"))
+                .selected_text(linked.map_or("Own settings", |d| d.label.as_str()))
+                .width(240.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(source, None, "Own settings");
+                    for d in &choices {
+                        ui.selectable_value(source, Some(d.id), d.label.as_str());
+                    }
+                });
+        });
+    }
+    match linked {
+        Some(d) if *source == Some(d.id) => {
+            // The decoder's settings, shown but not editable here.
+            let mut cfg = d.cfg.clone();
+            ui.add_enabled_ui(false, |ui| {
+                decode_ui::config_ui_with(ui, id, &mut cfg, names, None, None);
+            });
+            ui.horizontal(|ui| {
+                dim(ui, "The trigger follows this decoder's settings.");
+                if ui.button("Edit in decoder setup").clicked() {
+                    *edit = Some(d.id);
+                }
+            });
+            None
+        }
+        _ => {
+            let mut cfg = own;
+            decode_ui::config_ui_with(ui, id, &mut cfg, names, None, probe).then_some(cfg)
+        }
     }
 }
 
@@ -246,14 +314,28 @@ fn protocol_note(ui: &mut egui::Ui) {
     );
 }
 
-fn uart(ui: &mut egui::Ui, t: &mut TriggerSetup, probe: &mut BaudProbe, names: &[String]) {
+fn uart(
+    ui: &mut egui::Ui,
+    t: &mut TriggerSetup,
+    probe: &mut BaudProbe,
+    names: &[String],
+    decoders: &[DecoderChoice],
+    edit: &mut Option<u32>,
+) {
     protocol_note(ui);
     let p = &mut t.protocol;
-    let mut cfg = Config::Uart(p.uart.clone());
-    if decode_ui::config_ui_with(ui, "trg_uart", &mut cfg, names, None, Some(probe)) {
-        if let Config::Uart(c) = cfg {
-            p.uart = c;
-        }
+    let own = Config::Uart(p.uart.clone());
+    if let Some(Config::Uart(c)) = settings(
+        ui,
+        "trg_uart",
+        &mut p.uart_source,
+        own,
+        names,
+        decoders,
+        Some(probe),
+        edit,
+    ) {
+        p.uart = c;
     }
     ui.add_space(6.0);
     ui.label(RichText::new("Look for").color(theme::TEXT).strong());
@@ -319,14 +401,27 @@ fn uart(ui: &mut egui::Ui, t: &mut TriggerSetup, probe: &mut BaudProbe, names: &
     trigger_point(ui, p);
 }
 
-fn spi(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
+fn spi(
+    ui: &mut egui::Ui,
+    t: &mut TriggerSetup,
+    names: &[String],
+    decoders: &[DecoderChoice],
+    edit: &mut Option<u32>,
+) {
     protocol_note(ui);
     let p = &mut t.protocol;
-    let mut cfg = Config::Spi(p.spi.clone());
-    if decode_ui::config_ui_with(ui, "trg_spi", &mut cfg, names, None, None) {
-        if let Config::Spi(c) = cfg {
-            p.spi = c;
-        }
+    let own = Config::Spi(p.spi.clone());
+    if let Some(Config::Spi(c)) = settings(
+        ui,
+        "trg_spi",
+        &mut p.spi_source,
+        own,
+        names,
+        decoders,
+        None,
+        edit,
+    ) {
+        p.spi = c;
     }
     ui.add_space(6.0);
     ui.label(RichText::new("Look for a word").color(theme::TEXT).strong());
@@ -354,14 +449,27 @@ fn spi(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
     trigger_point(ui, p);
 }
 
-fn i2c(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String]) {
+fn i2c(
+    ui: &mut egui::Ui,
+    t: &mut TriggerSetup,
+    names: &[String],
+    decoders: &[DecoderChoice],
+    edit: &mut Option<u32>,
+) {
     protocol_note(ui);
     let p = &mut t.protocol;
-    let mut cfg = Config::I2c(p.i2c.clone());
-    if decode_ui::config_ui_with(ui, "trg_i2c", &mut cfg, names, None, None) {
-        if let Config::I2c(c) = cfg {
-            p.i2c = c;
-        }
+    let own = Config::I2c(p.i2c.clone());
+    if let Some(Config::I2c(c)) = settings(
+        ui,
+        "trg_i2c",
+        &mut p.i2c_source,
+        own,
+        names,
+        decoders,
+        None,
+        edit,
+    ) {
+        p.i2c = c;
     }
     ui.add_space(6.0);
     ui.label(RichText::new("Look for").color(theme::TEXT).strong());

@@ -295,6 +295,35 @@ pub struct BaudProbe {
     pub format_result: Option<(UartConfig, Result<bf_decode::framing::FormatGuess, String>)>,
 }
 
+/// The settings that tell decoders of one kind apart, e.g. "CH0, 19200 8E1".
+pub fn short_summary(cfg: &Config) -> String {
+    match cfg {
+        Config::Uart(c) => {
+            let parity = match c.parity {
+                Parity::None => 'N',
+                Parity::Even => 'E',
+                Parity::Odd => 'O',
+                Parity::Mark => 'M',
+                Parity::Space => 'S',
+            };
+            format!(
+                "CH{}, {} {}{parity}{}",
+                c.rx, c.baud, c.data_bits, c.stop_bits
+            )
+        }
+        Config::Spi(c) => {
+            let mut parts = vec![format!("SCK CH{}", c.sck)];
+            for (name, ch) in [("CS", c.cs), ("MOSI", c.mosi), ("MISO", c.miso)] {
+                if let Some(ch) = ch {
+                    parts.push(format!("{name} CH{ch}"));
+                }
+            }
+            parts.join(", ")
+        }
+        Config::I2c(c) => format!("SCL CH{}, SDA CH{}", c.scl, c.sda),
+    }
+}
+
 /// Ending UART telegrams at a line feed is for text only: with values not shown as ASCII the option is
 /// switched off. True when that changed the settings.
 pub fn lf_only_for_ascii(cfg: &mut Config, fmt: Format) -> bool {
@@ -1544,6 +1573,19 @@ mod tests {
         let old: UartConfig = serde_json::from_str(r#"{"telegram_gap": 38.0}"#).unwrap();
         assert_eq!(old.telegram_gap_unit, GapUnit::Bits);
         assert_eq!(old.telegram_gap_bits(), 38.0);
+    }
+
+    #[test]
+    fn short_summaries_tell_decoders_apart() {
+        let u = Config::Uart(UartConfig {
+            baud: 19_200.0,
+            parity: Parity::Even,
+            ..Default::default()
+        });
+        assert_eq!(short_summary(&u), "CH0, 19200 8E1");
+        let i = Config::I2c(bf_decode::i2c::I2cConfig { scl: 4, sda: 5 });
+        assert_eq!(short_summary(&i), "SCL CH4, SDA CH5");
+        assert!(short_summary(&Config::default_for(DecoderKind::Spi)).starts_with("SCK CH"));
     }
 
     #[test]

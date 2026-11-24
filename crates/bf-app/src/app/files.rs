@@ -197,7 +197,13 @@ impl App {
                     config: e.cfg.clone(),
                 })
                 .collect(),
-            trigger: Some(self.trigger.clone()),
+            trigger: Some({
+                // Linked settings are saved as the own ones too, for a file opened without the decoder.
+                let mut t = self.trigger.clone();
+                let r = self.trigger_protocol();
+                (t.protocol.uart, t.protocol.spi, t.protocol.i2c) = (r.uart, r.spi, r.i2c);
+                t
+            }),
             zero_at_trigger: Some(self.zero_at_trigger),
             memory_mib: Some(self.memory_mib),
             markers: with_view.then_some((self.markers.m1, self.markers.m2)),
@@ -240,9 +246,19 @@ impl App {
                 self.samples = n;
             }
         }
+        // Links of a loaded trigger name decoder ids of the file: they are mapped once the file's
+        // decoders exist.
+        let mut file_links = None;
         if what.acquisition {
             if let Some(t) = s.trigger {
-                self.trigger = t.sanitized();
+                let mut t = t.sanitized();
+                let p = &mut t.protocol;
+                file_links = Some([
+                    p.uart_source.take(),
+                    p.spi_source.take(),
+                    p.i2c_source.take(),
+                ]);
+                self.trigger = t;
             }
             if let Some(m) = s.memory_mib.filter(|m| *m >= 64) {
                 self.memory_mib = m.min(1 << 21);
@@ -272,6 +288,7 @@ impl App {
         // Decoders: the old ones go, the saved ones are started again.
         let n = self.channels_n;
         for e in self.decoders.drain(..) {
+            self.trigger.protocol.unlink(e.handle.id.0, &e.cfg);
             self.layout.remove_decoder(e.handle.id.0);
             self.engine.remove(e.handle.id);
         }
@@ -311,6 +328,11 @@ impl App {
         }
         let ids: Vec<u32> = self.decoders.iter().map(|e| e.handle.id.0).collect();
         self.layout.place_missing_decoders(&ids);
+        if let Some([u, s, i]) = file_links {
+            let p = &mut self.trigger.protocol;
+            (p.uart_source, p.spi_source, p.i2c_source) = (u, s, i);
+            p.map_sources(&|id| map.get(&id).copied());
+        }
 
         if what.view {
             if let Some((a, b)) = s.markers {

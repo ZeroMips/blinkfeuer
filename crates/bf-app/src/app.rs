@@ -563,8 +563,7 @@ impl App {
         let pre = self.trigger.pre.samples(self.rate);
         let post = (!self.continuous).then(|| self.trigger.post.samples(self.rate).max(1));
         let kind = match self
-            .trigger
-            .protocol
+            .trigger_protocol()
             .build(self.trigger.mode)
             .map_err(|e| format!("trigger: {e}"))?
         {
@@ -996,8 +995,7 @@ impl App {
                     self.rate = rates
                         .iter()
                         .copied()
-                        .filter(|&r| r <= self.rate.min(max))
-                        .next_back()
+                        .rfind(|&r| r <= self.rate.min(max))
                         .unwrap_or(rates[0]);
                 }
                 ui.label(dim("Sample rate"));
@@ -1462,6 +1460,19 @@ impl App {
         }
     }
 
+    /// Id and settings of every decoder (what a trigger can take its settings from).
+    fn decoder_configs(&self) -> Vec<(u32, Config)> {
+        self.decoders
+            .iter()
+            .map(|e| (e.handle.id.0, e.cfg.clone()))
+            .collect()
+    }
+
+    /// The protocol trigger settings with the linked decoders' settings put in.
+    fn trigger_protocol(&self) -> crate::setup::ProtocolSetup {
+        self.trigger.protocol.resolved(&self.decoder_configs())
+    }
+
     /// Text of the annotation covering `sample` in a decoder lane (for the marker columns).
     fn decoder_text_at(&self, id: u32, lane: u8, sample: u64) -> String {
         let Some(e) = self.entry(id) else {
@@ -1508,8 +1519,11 @@ impl App {
         if !is_text_uart(&self.decoders[i].cfg) && self.decoders[i].format == Format::Ascii {
             self.decoders[i].format = Format::Hex;
         }
-        self.layout
-            .replace_decoder(old.0, self.decoders[i].handle.id.0);
+        let new = self.decoders[i].handle.id.0;
+        self.layout.replace_decoder(old.0, new);
+        self.trigger
+            .protocol
+            .map_sources(&|id| Some(if id == old.0 { new } else { id }));
         self.selected_ann = None;
     }
 
@@ -2390,23 +2404,40 @@ impl App {
         let names = self.layout.names.clone();
         let n = self.channels_n as usize;
         let (rate, continuous) = (self.rate, self.continuous);
+        let decoders: Vec<crate::trigger_ui::DecoderChoice> = self
+            .decoders
+            .iter()
+            .map(|e| crate::trigger_ui::DecoderChoice {
+                id: e.handle.id.0,
+                label: format!("{} ({})", e.name, decode_ui::short_summary(&e.cfg)),
+                cfg: e.cfg.clone(),
+            })
+            .collect();
+        let mut edit = None;
         egui::Window::new("Trigger")
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                crate::trigger_ui::contents(
+                edit = crate::trigger_ui::contents(
                     ui,
                     &mut self.trigger,
                     &mut self.trigger_probe,
                     &mut self.memory_mib,
                     &names,
+                    &decoders,
                     n,
                     rate,
                     continuous,
                 );
             });
         self.show_trigger = open;
+        // "Edit in decoder setup": open the decoder window on that decoder.
+        if let Some(i) = edit.and_then(|id| self.decoders.iter().position(|e| e.handle.id.0 == id))
+        {
+            self.setup.selected = i;
+            self.show_decoders = true;
+        }
         if let Some(rx) = self.trigger_probe.request.take() {
             self.trigger_probe.result = Some((rx, self.detect_baud(rx)));
         }
@@ -2472,6 +2503,7 @@ impl App {
                         }
                         decode_ui::Action::Remove(i) => {
                             let e = self.decoders.remove(i);
+                            self.trigger.protocol.unlink(e.handle.id.0, &e.cfg);
                             self.layout.remove_decoder(e.handle.id.0);
                             self.engine.remove(e.handle.id);
                             self.selected_ann = None;
