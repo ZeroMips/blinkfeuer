@@ -57,7 +57,8 @@ A working first version. What is verified and what is not:
   channels, or a protocol trigger with a pattern: UART text or bytes, SPI words, or I2C events (S, Sr,
   P, @50W addresses, data bytes, ! for NAK), each with X for free nibbles or bits and * for anything in
   between, optionally also firing on the protocol's error (UART framing/parity error, incomplete SPI
-  word, I2C NAK); the trigger point is the start or the end of the match. Pre-trigger and
+  word, I2C NAK); with Modbus RTU in the UART settings the pattern applies to whole frames from their
+  first byte, or to frames with a bad CRC. The trigger point is the start or the end of the match. Pre-trigger and
   post-trigger are set separately in samples or time, times can be shown relative to the trigger, and a
   triggered capture stops instead of dropping data when memory is full.
 - **Measurements** (View menu): edges, frequency, period, duty cycle and the shortest, mean and longest

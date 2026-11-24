@@ -514,7 +514,7 @@ pub fn config_ui_with(
                 });
             });
             if display.is_some() {
-                section(ui, "Protocol", |ui| {
+                section(ui, "High-level protocol", |ui| {
                     grid(ui, &format!("{id}g4"), |ui| {
                         changed |= param(ui, "Protocol", help::UART_PROTOCOL, |ui| {
                             let mut ch = false;
@@ -1014,12 +1014,23 @@ fn search_slice(
 ) {
     let (query, fmt, errors_only) = (s.key.query.clone(), s.key.fmt, s.key.errors_only);
     let ok = |a: &Annotation| !errors_only || a.is_error();
+    // On telegram and frame rows a query that is a pattern follows the pattern's rules only (Modbus
+    // frames from their first byte, as in the trigger); words still search the text.
+    let text = !(s.scope == PatternScope::Contents && s.pattern.is_some());
     for (i, a) in lane.iter().enumerate().take(end).skip(s.scanned) {
-        let mut hit = ok(a) && !query.is_empty() && matches(a, lane_name, &query, fmt, chars);
+        let mut hit =
+            text && ok(a) && !query.is_empty() && matches(a, lane_name, &query, fmt, chars);
         hit |= errors_only && query.is_empty() && a.is_error();
         match (&mut s.pattern, s.scope) {
             (Some(p), PatternScope::Contents) => {
-                hit |= ok(a) && p.found_in(bf_decode::telegram_chars(chars, a));
+                // A Modbus frame matches from its first byte, as in the trigger.
+                let inside = bf_decode::telegram_chars(chars, a);
+                hit |= ok(a)
+                    && if a.kind == Kind::ModbusFrame {
+                        p.found_at_start(inside)
+                    } else {
+                        p.found_in(inside)
+                    };
             }
             (Some(p), PatternScope::Items) => {
                 if let Some(first) = p.feed(i, a) {
@@ -1693,6 +1704,28 @@ mod tests {
         let mut s = search(&uart, 0, "61 62 63", true);
         search_slice(&mut s, &chars, 3, "RX", &chars);
         assert_eq!(s.hits, vec![1]);
+    }
+
+    #[test]
+    fn search_matches_modbus_frames_from_their_first_byte() {
+        let mut uart = UartConfig::default();
+        uart.protocol = Protocol::ModbusRtu;
+        let modbus = Config::Uart(uart);
+        let chars = text_lane(&[0x65, 0x06, 0x01, 0x01, 0x11, 0x03, 0x65, 0x06]);
+        let frame = |start: u64, end: u64, value: u32| Annotation {
+            start,
+            end,
+            lane: 1,
+            ..ann(Kind::ModbusFrame, value, 0)
+        };
+        let frames = vec![frame(0, 40, 0x6506), frame(40, 80, 0x1103)];
+        assert_eq!(hits(&modbus, &frames, &chars, 1, "65 06"), vec![0]);
+        // 65 06 is also inside the second frame, but not at its start.
+        assert_eq!(hits(&modbus, &frames, &chars, 1, "XX 03 * 06"), vec![1]);
+        assert_eq!(
+            hits(&modbus, &frames, &chars, 1, "06 01"),
+            Vec::<u32>::new()
+        );
     }
 
     #[test]

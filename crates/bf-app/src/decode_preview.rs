@@ -316,6 +316,9 @@ fn i2c(cfg: &bf_decode::i2c::I2cConfig, names: &[String]) -> Preview {
 pub fn build_trigger(t: &ProtocolTrigger, at: TriggerAt, names: &[String]) -> Option<Preview> {
     t.check().ok()?;
     let mut p = match t {
+        ProtocolTrigger::Uart(cfg, UartMatch::ModbusFrames { items, or_bad }) => {
+            modbus_trigger(cfg, items, *or_bad, at, names)
+        }
         ProtocolTrigger::Uart(cfg, m) => uart_trigger(cfg, m, at, names),
         ProtocolTrigger::Spi(cfg, m) => spi_trigger(cfg, m, names),
         ProtocolTrigger::I2c(cfg, m) => i2c_trigger(cfg, m, names),
@@ -402,6 +405,7 @@ fn uart_trigger(
             (chars, false)
         }
         UartMatch::Error => (vec![0x4B & mask, 0x4B & mask], true),
+        UartMatch::ModbusFrames { .. } => unreachable!("modbus_trigger"),
     };
     let frame = cfg.char_bits() * BIT as f64;
     let idle = 2 * BIT;
@@ -439,6 +443,7 @@ fn uart_trigger(
             }
         ),
         UartMatch::Error => "a framing error (here: a stop bit that is low)".into(),
+        UartMatch::ModbusFrames { .. } => unreachable!("modbus_trigger"),
     };
     let caption = vec![
         format!(
@@ -468,6 +473,126 @@ fn uart_trigger(
 /// A concrete value for a pattern value: the fixed bits, and 0101... for the free ones.
 fn concrete(value: u32, care: u32, full: u32) -> u32 {
     (value & care | 0x5555_5555 & !care) & full
+}
+
+/// Modbus: a frame that does not begin with the pattern, then one that does (or, with only the
+/// alternative, one with a bad CRC), each with its CRC.
+fn modbus_trigger(
+    cfg: &UartConfig,
+    items: &[PatItem],
+    or_bad: bool,
+    at: TriggerAt,
+    names: &[String],
+) -> (Preview, Wave) {
+    use bf_decode::modbus::crc16;
+    const BIT: usize = 16;
+    let cfg = UartConfig {
+        telegrams: false,
+        ..cfg.clone()
+    };
+    let as_chars = |bytes: &[u8]| -> Vec<Annotation> {
+        bytes
+            .iter()
+            .map(|&b| Annotation {
+                start: 0,
+                end: 1,
+                value: b as u32,
+                lane: 0,
+                kind: bf_decode::Kind::Data,
+                bits: 8,
+                flags: 0,
+            })
+            .collect()
+    };
+    let search = bf_decode::trigger::PatternSearch::new(items.to_vec());
+    let begins = |body: &[u8]| {
+        search
+            .as_ref()
+            .is_some_and(|p| p.found_at_start(&as_chars(body)))
+    };
+    let other: Vec<u8> = [
+        vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x01],
+        vec![0x7F, 0x10, 0x12, 0x34, 0x00, 0x02],
+    ]
+    .into_iter()
+    .find(|b| !begins(b))
+    .unwrap_or_default();
+    let mut body: Vec<u8> = Vec::new();
+    for it in items {
+        match *it {
+            PatItem::Char { value, care } => body.push(concrete(value, care, 0xFF) as u8),
+            _ => body.extend([0x00, 0x00]),
+        }
+    }
+    let bad = items.is_empty();
+    if bad {
+        body = vec![0x11, 0x06, 0x00, 0x01, 0x00, 0x03];
+    }
+    while body.len() < 2 {
+        body.push(0x03);
+    }
+    let with_crc = |b: &[u8], broken: bool| {
+        let mut f = b.to_vec();
+        let crc = crc16(b) ^ if broken { 0x00FF } else { 0 };
+        f.extend_from_slice(&crc.to_le_bytes());
+        f
+    };
+    let frames = [with_crc(&other, false), with_crc(&body, bad)];
+    let ch = cfg.char_bits() * BIT as f64;
+    let (lead, gap) = (2.0 * ch, 5.0 * ch);
+    let total: f64 = frames.iter().map(|f| f.len() as f64 * ch).sum();
+    let len = (lead + total + 2.0 * gap) as usize;
+    let mut w = Wave::new(
+        cfg.baud * BIT as f64,
+        len,
+        if cfg.invert { 0 } else { 1 << cfg.rx },
+    );
+    let mut labels = Vec::new();
+    let mut t = lead;
+    for f in &frames {
+        for &b in f {
+            w.uart(cfg.rx, t.round() as u64, &cfg, &[b]);
+            labels.push((t, t + ch, format!("{b:02X}")));
+            t += ch;
+        }
+        t += gap;
+    }
+    let lanes = decode(&w, Box::new(Uart::new(cfg.clone())));
+    let what = if bad {
+        "a frame with a bad CRC".to_string()
+    } else {
+        format!(
+            "a Modbus frame beginning with {}{}",
+            crate::setup::format_hex_pattern(items),
+            if or_bad { " (or a bad frame)" } else { "" }
+        )
+    };
+    let caption = vec![
+        format!(
+            "The trigger looks for {what}; the frame before it does not match. Free bits are \
+             shown as 0101, anything in between as 00."
+        ),
+        format!(
+            "T marks the trigger sample: the {} of the frame.",
+            at_text(at)
+        ),
+    ];
+    let p = Preview {
+        len,
+        rows: vec![SigRow {
+            label: format!("RX  {}", chan(names, cfg.rx)),
+            levels: levels_of(&w, cfg.rx),
+        }],
+        marks: Vec::new(),
+        bit_labels: labels,
+        lanes: vec![
+            ("bytes".into(), lanes[0].clone()),
+            ("frames".into(), lanes.get(1).cloned().unwrap_or_default()),
+        ],
+        caption,
+        trigger: None,
+    };
+    (p, w)
 }
 
 fn spi_trigger(cfg: &bf_decode::spi::SpiConfig, m: &SpiMatch, names: &[String]) -> (Preview, Wave) {
@@ -921,6 +1046,47 @@ mod tests {
         assert_eq!(words(&p, 0), vec![0x2E, 0x45, 0x2E, 0x2E, 0x0A]);
         assert_eq!(p.trigger, Some(p.lanes[0].1[4].end as f64));
         assert!(p.caption[0].contains("4X * 0A") && p.caption[0].contains("error"));
+    }
+
+    #[test]
+    fn modbus_trigger_example_fires_at_the_matching_frame() {
+        let cfg = UartConfig {
+            baud: 19_200.0,
+            parity: Parity::Even,
+            protocol: bf_decode::uart::Protocol::ModbusRtu,
+            ..Default::default()
+        };
+        let items = crate::setup::parse_hex_pattern("65 06 * XX").unwrap();
+        for at in [TriggerAt::Start, TriggerAt::End] {
+            let t = ProtocolTrigger::Uart(
+                cfg.clone(),
+                UartMatch::ModbusFrames {
+                    items: items.clone(),
+                    or_bad: false,
+                },
+            );
+            let p = build_trigger(&t, at, &[]).unwrap();
+            let frames = &p.lanes[1].1;
+            assert_eq!(frames.len(), 2, "{frames:?}");
+            assert!(frames.iter().all(|f| !f.is_error()), "both CRCs are right");
+            let want = match at {
+                TriggerAt::Start => frames[1].start,
+                TriggerAt::End => frames[1].end,
+            };
+            assert_eq!(p.trigger, Some(want as f64), "{at:?}");
+        }
+        // Only bad frames: the second frame has a broken CRC and is the one that fires.
+        let t = ProtocolTrigger::Uart(
+            cfg,
+            UartMatch::ModbusFrames {
+                items: vec![],
+                or_bad: true,
+            },
+        );
+        let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
+        let frames = &p.lanes[1].1;
+        assert!(frames[1].is_error());
+        assert_eq!(p.trigger, Some(frames[1].end as f64));
     }
 
     #[test]

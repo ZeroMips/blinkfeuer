@@ -9,7 +9,7 @@ use bf_decode::spi::SpiConfig;
 use bf_decode::trigger::{
     I2cMatch, PatItem, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch,
 };
-use bf_decode::uart::UartConfig;
+use bf_decode::uart::{Protocol, UartConfig};
 use bf_decode::Format;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -656,6 +656,13 @@ impl ProtocolSetup {
             TriggerMode::Pattern => return Ok(None),
             TriggerMode::Uart => {
                 let what = match self.uart_what {
+                    // With Modbus RTU in the settings the pattern applies to whole frames.
+                    UartWhat::Bytes if self.uart.protocol == Protocol::ModbusRtu => {
+                        UartMatch::ModbusFrames {
+                            items: bf_decode::trigger::normalize(self.uart_pattern()?),
+                            or_bad: self.uart_or_error,
+                        }
+                    }
                     UartWhat::Bytes => UartMatch::pattern(self.uart_pattern()?, self.uart_or_error),
                     UartWhat::Error => UartMatch::Error,
                 };
@@ -686,6 +693,15 @@ impl ProtocolSetup {
         match mode {
             TriggerMode::Pattern => String::new(),
             TriggerMode::Uart => match self.uart_what {
+                UartWhat::Bytes if self.uart.protocol == Protocol::ModbusRtu => format!(
+                    "Modbus frame {}{}",
+                    self.uart_bytes,
+                    if self.uart_or_error {
+                        " or bad frame"
+                    } else {
+                        ""
+                    }
+                ),
                 UartWhat::Bytes => format!(
                     "UART \"{}\"{}",
                     self.uart_bytes,
@@ -1196,6 +1212,19 @@ mod tests {
                 )
             ))
         );
+        // With Modbus RTU in the settings the pattern applies to whole frames.
+        let mut modbus = p.clone();
+        modbus.uart.protocol = Protocol::ModbusRtu;
+        assert!(matches!(
+            modbus.build(TriggerMode::Uart).unwrap(),
+            Some(ProtocolTrigger::Uart(
+                _,
+                UartMatch::ModbusFrames { or_bad: true, .. }
+            ))
+        ));
+        assert!(modbus
+            .summary(TriggerMode::Uart)
+            .starts_with("Modbus frame"));
         p.uart_bytes.clear();
         assert!(
             p.build(TriggerMode::Uart).is_ok(),

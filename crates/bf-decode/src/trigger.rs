@@ -146,6 +146,11 @@ impl PatternSearch {
         hit
     }
 
+    /// Whether `seq` begins with a match (Modbus frames: the pattern starts at the first byte).
+    pub fn found_at_start(&self, seq: &[Annotation]) -> bool {
+        matches_from_start(&self.items, seq)
+    }
+
     /// Whether `seq` contains a match (from a fresh start).
     pub fn found_in(&self, seq: &[Annotation]) -> bool {
         let mut s = PatternSearch {
@@ -164,6 +169,9 @@ pub enum UartMatch {
     Pattern { items: Vec<PatItem>, or_error: bool },
     /// A framing error, a parity error or a break.
     Error,
+    /// Modbus RTU frames (the UART decoder runs with the Modbus protocol) that begin with bytes
+    /// matching `items`; with `or_bad` also any frame with a bad CRC or a character error.
+    ModbusFrames { items: Vec<PatItem>, or_bad: bool },
 }
 
 impl UartMatch {
@@ -322,6 +330,47 @@ struct Matcher {
     items: Vec<PatItem>,
     alternative: Alternative,
     active: Vec<(usize, u64)>,
+    /// Modbus mode: the pattern applies to whole frames (lane 1) from their first character; the
+    /// characters (lane 0) are kept until their frame is complete.
+    frames: Option<Vec<Annotation>>,
+}
+
+/// Whether `seq` begins with a match of `items` (the match may end before `seq` does).
+fn matches_from_start(items: &[PatItem], seq: &[Annotation]) -> bool {
+    // States: items matched so far; a gap may also match nothing.
+    fn add(items: &[PatItem], states: &mut Vec<usize>, i: usize) {
+        if !states.contains(&i) {
+            states.push(i);
+        }
+        if items.get(i) == Some(&PatItem::Gap) {
+            add(items, states, i + 1);
+        }
+    }
+    if items.is_empty() {
+        return true;
+    }
+    let mut states = Vec::new();
+    add(items, &mut states, 0);
+    for c in seq {
+        let mut next = Vec::new();
+        for &i in &states {
+            match items[i] {
+                PatItem::Gap => add(items, &mut next, i),
+                ref item if item.matches(c) => {
+                    if i + 1 == items.len() {
+                        return true;
+                    }
+                    add(items, &mut next, i + 1);
+                }
+                _ => {}
+            }
+        }
+        if next.is_empty() {
+            return false;
+        }
+        states = next;
+    }
+    false
 }
 
 struct DecoderTrigger {
@@ -345,6 +394,33 @@ impl DecoderTrigger {
         let mut hit = None;
         let m = &mut self.matcher;
         for a in self.out.drain(..) {
+            if let Some(chars) = &mut m.frames {
+                // Modbus: characters wait for their frame; a frame matches as a whole.
+                match (a.lane, a.kind) {
+                    (0, Kind::Data) => chars.push(a),
+                    (1, Kind::ModbusFrame) => {
+                        let lo = chars.partition_point(|c| c.start < a.start);
+                        let hi = chars.partition_point(|c| c.end <= a.end);
+                        let bad = a.is_error();
+                        let found = if bad {
+                            m.alternative != Alternative::None
+                        } else {
+                            !m.items.is_empty()
+                                && matches_from_start(&m.items, &chars[lo..hi.max(lo)])
+                        };
+                        chars.drain(..hi.max(lo));
+                        self.max_len = self.max_len.max(a.end.saturating_sub(a.start));
+                        if found && hit.is_none() {
+                            hit = Some(match self.at {
+                                TriggerAt::Start => a.start,
+                                TriggerAt::End => a.end,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             if a.lane != m.lane {
                 continue;
             }
@@ -416,6 +492,9 @@ impl EventTrigger for DecoderTrigger {
         self.out.clear();
         self.now = 0;
         self.matcher.active.clear();
+        if let Some(chars) = &mut self.matcher.frames {
+            chars.clear();
+        }
         self.max_len = 0;
         self.lookback = (self.lookback_bits * sample_rate / self.bit_rate.max(1.0)) as u64;
     }
@@ -498,6 +577,12 @@ impl ProtocolTrigger {
             ProtocolTrigger::Uart(c, UartMatch::Pattern { items, or_error }) => {
                 check_pattern(items, *or_error, false, c.data_bits as u32, "character")
             }
+            ProtocolTrigger::Uart(c, UartMatch::ModbusFrames { items, or_bad }) => {
+                if c.protocol != crate::uart::Protocol::ModbusRtu {
+                    return Err("frames need the Modbus RTU protocol in the UART settings".into());
+                }
+                check_pattern(items, *or_bad, false, 8, "byte")
+            }
             ProtocolTrigger::Uart(..) => Ok(()),
             ProtocolTrigger::Spi(c, m) => {
                 let wired = match m.lane {
@@ -532,6 +617,31 @@ impl ProtocolTrigger {
             ProtocolTrigger::Uart(c, m) => {
                 let mut cfg = c.clone();
                 cfg.telegrams = false;
+                if let UartMatch::ModbusFrames { items, or_bad } = m {
+                    // A frame is only known once the pause after it has passed: keep the longest
+                    // frame (256 characters) and that pause in the window.
+                    return Ok(Box::new(DecoderTrigger {
+                        dec: Box::new(Uart::new(cfg.clone())),
+                        matcher: Matcher {
+                            lane: 1,
+                            items: normalize(items.clone()),
+                            alternative: if *or_bad {
+                                Alternative::UartError
+                            } else {
+                                Alternative::None
+                            },
+                            active: Vec::new(),
+                            frames: Some(Vec::new()),
+                        },
+                        at,
+                        out: Vec::new(),
+                        now: 0,
+                        max_len: 0,
+                        lookback_bits: 262.0 * (cfg.char_bits() + 2.0),
+                        bit_rate: cfg.baud,
+                        lookback: 0,
+                    }));
+                }
                 let (items, alternative) = match m {
                     UartMatch::Pattern { items, or_error } => (
                         normalize(items.clone()),
@@ -542,6 +652,7 @@ impl ProtocolTrigger {
                         },
                     ),
                     UartMatch::Error => (Vec::new(), Alternative::UartError),
+                    UartMatch::ModbusFrames { .. } => unreachable!("handled above"),
                 };
                 let chars = items.len().max(1) as f64;
                 (
@@ -588,6 +699,7 @@ impl ProtocolTrigger {
                 items,
                 alternative,
                 active: Vec::new(),
+                frames: None,
             },
             at,
             out: Vec::new(),
@@ -1081,6 +1193,95 @@ mod tests {
             .unwrap()
             .found_in(&seq));
         assert!(PatternSearch::new(vec![PatItem::Gap]).is_none());
+    }
+
+    #[test]
+    fn modbus_frames_match_from_their_first_byte() {
+        use crate::modbus::crc16;
+        use crate::uart::{Parity, Protocol};
+        let cfg = UartConfig {
+            rx: 0,
+            baud: 19_200.0,
+            parity: Parity::Even,
+            protocol: Protocol::ModbusRtu,
+            ..Default::default()
+        };
+        let rate = 1e6;
+        let char_samples = rate / 19_200.0 * 11.0;
+        let frame = |body: &[u8]| {
+            let mut f = body.to_vec();
+            f.extend_from_slice(&crc16(body).to_le_bytes());
+            f
+        };
+        // Write 0101 = 0000, then read 0404 x 1, then a frame with a broken CRC.
+        let write = frame(&[0x65, 0x06, 0x01, 0x01, 0x00, 0x00]);
+        let read = frame(&[0x65, 0x03, 0x04, 0x04, 0x00, 0x01]);
+        let mut bad = frame(&[0x11, 0x06, 0x00, 0x01, 0x00, 0x03]);
+        bad[3] ^= 0x40;
+        let mut w = Wave::new(rate, 60_000, 1);
+        let mut t = 1_000;
+        let mut ends = Vec::new();
+        let mut starts = Vec::new();
+        for f in [&write, &read, &bad] {
+            starts.push(t);
+            t = w.uart(0, t, &cfg, f);
+            // The generator leaves two idle bits after each character: the frame ends before.
+            ends.push(t - (2.0 * rate / 19_200.0) as u64);
+            t += (6.0 * char_samples) as u64;
+        }
+        let near =
+            |hit: Option<u64>, want: u64| hit.is_some_and(|h| (h as i64 - want as i64).abs() <= 5);
+        let go = |items: &[PatItem], or_bad, at| {
+            run_at(
+                &ProtocolTrigger::Uart(
+                    cfg.clone(),
+                    UartMatch::ModbusFrames {
+                        items: items.to_vec(),
+                        or_bad,
+                    },
+                ),
+                &w.samples,
+                rate,
+                64,
+                at,
+            )
+        };
+        let e = PatItem::exact;
+        // "65 03": the read frame, at its end or its start.
+        assert!(near(
+            go(&[e(0x65), e(0x03)], false, TriggerAt::End),
+            ends[1]
+        ));
+        assert!(near(
+            go(&[e(0x65), e(0x03)], false, TriggerAt::Start),
+            starts[1]
+        ));
+        // Anchored: 03 is the second byte of the read frame, never a first byte.
+        assert_eq!(go(&[e(0x03)], false, TriggerAt::End), None);
+        // Wildcards and gaps inside a frame: XX 06 * 00 00 is the write frame.
+        let any = PatItem::Char { value: 0, care: 0 };
+        assert!(near(
+            go(
+                &[any, e(0x06), PatItem::Gap, e(0x00), e(0x00)],
+                false,
+                TriggerAt::End
+            ),
+            ends[0]
+        ));
+        // The broken frame matches its bytes, but only as a bad frame.
+        assert_eq!(go(&[e(0x11)], false, TriggerAt::End), None);
+        assert!(near(go(&[e(0x11)], true, TriggerAt::End), ends[2]));
+        assert!(near(go(&[], true, TriggerAt::End), ends[2]));
+        // Frames need the Modbus protocol in the settings.
+        let plain = UartConfig {
+            protocol: Protocol::Plain,
+            ..cfg.clone()
+        };
+        let m = UartMatch::ModbusFrames {
+            items: vec![e(0x65)],
+            or_bad: false,
+        };
+        assert!(ProtocolTrigger::Uart(plain, m).check().is_err());
     }
 
     #[test]

@@ -403,10 +403,28 @@ fn uart(
     ) {
         p.uart = c;
     }
+    // With Modbus RTU in the settings the trigger looks at whole frames.
+    let effective = p
+        .uart_source
+        .and_then(|id| decoders.iter().find(|d| d.id == id))
+        .and_then(|d| match &d.cfg {
+            Config::Uart(c) => Some(c.protocol),
+            _ => None,
+        })
+        .unwrap_or(p.uart.protocol);
+    let modbus = effective == bf_decode::uart::Protocol::ModbusRtu;
     ui.add_space(6.0);
     ui.label(RichText::new("Look for").color(theme::TEXT).strong());
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut p.uart_what, UartWhat::Bytes, "Characters");
+        ui.selectable_value(
+            &mut p.uart_what,
+            UartWhat::Bytes,
+            if modbus {
+                "Modbus frames"
+            } else {
+                "Characters"
+            },
+        );
         ui.selectable_value(
             &mut p.uart_what,
             UartWhat::Error,
@@ -440,6 +458,12 @@ fn uart(
         });
         let err = pattern_error(p.uart_pattern(), p.uart_or_error, "character");
         entry(ui, &mut p.uart_bytes, 260.0, err.as_deref());
+        if modbus {
+            dim(
+                ui,
+                "A frame that begins with these bytes: slave, function, data, e.g. 65 06 01 01 (write register 0101 on slave 65), XX 03 * for any read. X, 0b and * as for characters.",
+            );
+        }
         dim(
             ui,
             if p.uart_ascii {
@@ -450,7 +474,11 @@ fn uart(
         );
         ui.checkbox(
             &mut p.uart_or_error,
-            "or a character with a framing / parity error or break",
+            if modbus {
+                "or a bad frame (CRC or character error)"
+            } else {
+                "or a character with a framing / parity error or break"
+            },
         );
     }
     trigger_point(ui, p);
