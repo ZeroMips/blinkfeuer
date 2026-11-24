@@ -81,7 +81,7 @@ A working first version. What is verified and what is not:
 
 ## Build and run
 
-You need a recent stable Rust toolchain (the workspace sets `rust-version = 1.80`).
+You need Rust 1.88 or newer (`rust-version` of the workspace; the dependencies need it).
 
 ```sh
 cargo run --release -p bf-app --bin blinkfeuer              # the application
