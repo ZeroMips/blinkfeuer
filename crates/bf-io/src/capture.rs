@@ -27,8 +27,10 @@ const MAGIC: &[u8; 8] = b"BFCAP\r\n\x1a";
 const VERSION: u32 = 1;
 const MAX_HEADER: usize = 64 << 20;
 
+/// Why a file could not be read or written.
 #[derive(Debug)]
 pub enum Error {
+    /// Reading or writing failed.
     Io(io::Error),
     /// Not a capture file, damaged, or from a newer version.
     Format(String),
@@ -77,6 +79,7 @@ struct Header {
 
 /// A capture read from a file.
 pub struct Loaded {
+    /// The samples.
     pub store: CaptureStore,
     /// The application setup saved with the capture (`null` if there was none).
     pub setup: serde_json::Value,

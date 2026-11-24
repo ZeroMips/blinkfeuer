@@ -17,12 +17,15 @@ pub enum Protocol {
     /// Plain characters, optionally joined into telegrams.
     #[default]
     Plain,
+    /// Modbus RTU frames (see [`modbus`](crate::modbus)).
     ModbusRtu,
 }
 
 impl Protocol {
+    /// All protocols, in the order the user interface offers them.
     pub const ALL: [Protocol; 2] = [Protocol::Plain, Protocol::ModbusRtu];
 
+    /// Name for the user.
     pub fn label(self) -> &'static str {
         match self {
             Protocol::Plain => "None (characters)",
@@ -31,10 +34,14 @@ impl Protocol {
     }
 }
 
+/// The parity bit of a character.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Parity {
+    /// No parity bit.
     None,
+    /// The number of 1 bits, parity bit included, is even.
     Even,
+    /// The number of 1 bits, parity bit included, is odd.
     Odd,
     /// Parity bit always 1.
     Mark,
@@ -43,6 +50,7 @@ pub enum Parity {
 }
 
 impl Parity {
+    /// All kinds, in the order the user interface offers them.
     pub const ALL: [Parity; 5] = [
         Parity::None,
         Parity::Even,
@@ -51,6 +59,7 @@ impl Parity {
         Parity::Space,
     ];
 
+    /// Name for the user.
     pub fn label(self) -> &'static str {
         match self {
             Parity::None => "None",
@@ -73,8 +82,10 @@ pub enum GapUnit {
 }
 
 impl GapUnit {
+    /// All units, in the order the user interface offers them.
     pub const ALL: [GapUnit; 2] = [GapUnit::Bits, GapUnit::Chars];
 
+    /// Name for the user.
     pub fn label(self) -> &'static str {
         match self {
             GapUnit::Bits => "bit times",
@@ -83,16 +94,21 @@ impl GapUnit {
     }
 }
 
+/// Settings of the UART decoder.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct UartConfig {
+    /// Channel of the data line.
     pub rx: u8,
+    /// Bits per second.
     pub baud: f64,
     /// 5 to 9.
     pub data_bits: u8,
+    /// The parity bit.
     pub parity: Parity,
     /// 1, 1.5 or 2.
     pub stop_bits: f32,
+    /// The least significant bit of a character is sent first (as usual).
     pub lsb_first: bool,
     /// The idle level is low (inverted signal levels, e.g. RS-232 without a transceiver).
     pub invert: bool,
@@ -100,6 +116,7 @@ pub struct UartConfig {
     pub telegrams: bool,
     /// A telegram ends when the line has been idle this long (in `telegram_gap_unit`).
     pub telegram_gap: f64,
+    /// Unit of `telegram_gap`.
     pub telegram_gap_unit: GapUnit,
     /// ... or right after a line feed (0x0A); meant for text (the application offers it only while
     /// the values are shown as ASCII).
@@ -154,6 +171,7 @@ struct Frame {
     flags: u8,
 }
 
+/// The UART decoder.
 pub struct Uart {
     cfg: UartConfig,
     layer: Box<dyn ByteLayer>,
@@ -166,6 +184,7 @@ pub struct Uart {
 }
 
 impl Uart {
+    /// A decoder with these settings.
     pub fn new(cfg: UartConfig) -> Self {
         let layer: Box<dyn ByteLayer> = match cfg.protocol {
             Protocol::Plain => Box::new(Telegrams::new(
@@ -185,6 +204,7 @@ impl Uart {
         }
     }
 
+    /// Its settings.
     pub fn config(&self) -> &UartConfig {
         &self.cfg
     }

@@ -13,10 +13,12 @@
 pub struct ChannelCount(u8);
 
 impl ChannelCount {
+    /// A channel count; `None` unless it is 2, 4, 8, 16 or 32.
     pub fn new(n: u8) -> Option<Self> {
         matches!(n, 2 | 4 | 8 | 16 | 32).then_some(Self(n))
     }
 
+    /// The number of channels.
     pub fn get(self) -> u8 {
         self.0
     }
@@ -56,6 +58,7 @@ pub struct Unpacker {
 }
 
 impl Unpacker {
+    /// An unpacker for a stream of `channels` channels.
     pub fn new(channels: ChannelCount) -> Self {
         Self {
             channels,
@@ -64,6 +67,7 @@ impl Unpacker {
         }
     }
 
+    /// The channel count it unpacks.
     pub fn channels(&self) -> ChannelCount {
         self.channels
     }

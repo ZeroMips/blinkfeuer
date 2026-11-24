@@ -37,16 +37,20 @@ pub const STANDARD: [f64; 28] = [
     4_000_000.0,
 ];
 
+/// The result of [`detect`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaudGuess {
     /// The rate to use: the nearest standard rate if one is within 2.5 %, else the measured one.
     pub baud: f64,
+    /// The rate measured.
     pub measured: f64,
+    /// `baud` is a standard rate.
     pub snapped: bool,
     /// Share of the widths (up to one frame long) that are whole bit times.
     pub fit: f64,
     /// Widths looked at.
     pub widths: usize,
+    /// Measured bit time in samples.
     pub bit_samples: f64,
     /// Something worth knowing about the result, e.g. a sample rate that is low for this baud rate.
     pub note: Option<String>,

@@ -12,9 +12,11 @@ use zip::ZipArchive;
 
 /// A capture read from a session file.
 pub struct SigrokCapture {
+    /// The samples.
     pub store: CaptureStore,
     /// One name per channel of the store (sigrok's probe names, `CHn` for the unused ones).
     pub names: Vec<String>,
+    /// Samples per second.
     pub sample_rate: f64,
     /// Probes in the file (the store has the next supported channel count, 2, 4, 8, 16 or 32).
     pub probes: usize,

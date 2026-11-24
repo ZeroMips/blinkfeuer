@@ -1,3 +1,5 @@
+//! The Blinkfeuer application: command line options and the start of the user interface.
+
 mod app;
 mod decode_preview;
 mod decode_ui;

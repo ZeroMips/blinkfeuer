@@ -2,6 +2,8 @@
 //!
 //! No UI and no USB code lives here, so everything is unit-testable and benchmarkable.
 
+#![warn(missing_docs)]
+
 pub mod format;
 pub mod measure;
 pub mod store;

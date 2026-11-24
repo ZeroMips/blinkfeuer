@@ -7,26 +7,39 @@ use std::time::{Duration, Instant};
 
 /// Message sent by the UART generator on CH0 (115200 baud, 8N1).
 pub const UART_MESSAGE: &[u8] = b"blinkfeuer sim 0123456789\r\n";
+/// Baud rate of the UART generator.
 pub const UART_BAUD: f64 = 115_200.0;
 /// UART slots (bit times) per character and idle slots between messages.
 const UART_SLOTS_PER_CHAR: u64 = 12; // start + 8 data + stop + 2 idle
 const UART_GAP_SLOTS: u64 = 200;
 
+/// Time from one SPI transaction to the next.
 pub const SPI_PERIOD_NS: u64 = 50_000;
+/// Time from one I2C transaction to the next.
 pub const I2C_PERIOD_NS: u64 = 500_000;
+/// The bytes of an I2C transaction: address 50 (write), then two data bytes.
 pub const I2C_BYTES: [u8; 3] = [0xA0, 0x3C, 0x5A];
 const I2C_SLOT_NS: u64 = 2_500; // quarter of a 100 kHz bit
+/// Period of the PWM signal.
 pub const PWM_PERIOD_NS: u64 = 100_000;
 
 /// Channel assignment of the generator pattern.
 pub mod ch {
+    /// UART, sends [`UART_MESSAGE`](super::UART_MESSAGE).
     pub const UART: u8 = 0;
+    /// SPI chip select (active low).
     pub const SPI_CS: u8 = 1;
+    /// SPI clock (mode 0, 1 MHz).
     pub const SPI_SCK: u8 = 2;
+    /// SPI data: A5, then the transaction number.
     pub const SPI_MOSI: u8 = 3;
+    /// I2C clock.
     pub const I2C_SCL: u8 = 4;
+    /// I2C data.
     pub const I2C_SDA: u8 = 5;
+    /// PWM with a duty cycle sweeping from 10 to 90 %.
     pub const PWM: u8 = 6;
+    /// 1 MHz square wave.
     pub const CLOCK_1MHZ: u8 = 7;
     /// CH8..CH15: Gray counter (8 bit), +1 every microsecond.
     pub const GRAY_LSB: u8 = 8;
@@ -45,6 +58,7 @@ impl Default for Generator {
 }
 
 impl Generator {
+    /// The generator (builds the I2C table).
     pub fn new() -> Self {
         let mut t: Vec<(bool, bool)> = Vec::new();
         let mut push = |scl, sda, n| t.extend(std::iter::repeat_n((scl, sda), n));
@@ -139,6 +153,7 @@ pub fn pattern_sample(g: &Generator, pattern: Pattern, index: u64, rate: f64) ->
     }
 }
 
+/// The simulated analyzer.
 pub struct SimDevice {
     info: DeviceInfo,
     caps: Capabilities,

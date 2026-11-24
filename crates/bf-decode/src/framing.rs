@@ -26,13 +26,18 @@ const PARITY_EVIDENCE: usize = 16;
 /// Characters needed for any answer.
 const MIN_CHARS: usize = 8;
 
+/// The result of [`detect_format`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct FormatGuess {
+    /// Data bits per character.
     pub data_bits: u8,
+    /// Parity bit.
     pub parity: Parity,
+    /// Stop bits (always 1: 2 read the same way).
     pub stop_bits: f32,
     /// Characters decoded with this format, and how many of them had an error.
     pub chars: usize,
+    /// See `chars`.
     pub errors: usize,
     /// What the result cannot rule out, e.g. 2 stop bits.
     pub note: Option<String>,

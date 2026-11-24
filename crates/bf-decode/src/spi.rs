@@ -2,20 +2,27 @@
 
 use crate::{bit, flag, Annotation, Decoder, Kind};
 
+/// Settings of the SPI decoder.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SpiConfig {
+    /// Channel of the clock.
     pub sck: u8,
+    /// Channel of the chip select, if wired.
     pub cs: Option<u8>,
+    /// Channel of MOSI, if wired.
     pub mosi: Option<u8>,
+    /// Channel of MISO, if wired.
     pub miso: Option<u8>,
     /// Clock idles high.
     pub cpol: bool,
     /// Data is sampled on the second (trailing) clock edge.
     pub cpha: bool,
+    /// The most significant bit of a word is sent first.
     pub msb_first: bool,
     /// Bits per word, 2 to 32.
     pub bits: u8,
+    /// The chip select is active when low.
     pub cs_active_low: bool,
 }
 
@@ -35,6 +42,7 @@ impl Default for SpiConfig {
     }
 }
 
+/// The SPI decoder.
 pub struct Spi {
     cfg: SpiConfig,
     primed: bool,
@@ -51,6 +59,7 @@ pub struct Spi {
 }
 
 impl Spi {
+    /// A decoder with these settings.
     pub fn new(cfg: SpiConfig) -> Self {
         Self {
             cfg,
@@ -67,6 +76,7 @@ impl Spi {
         }
     }
 
+    /// Its settings.
     pub fn config(&self) -> &SpiConfig {
         &self.cfg
     }

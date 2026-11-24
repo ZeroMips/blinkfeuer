@@ -32,15 +32,20 @@ pub enum Cond {
     /// Don't care.
     #[default]
     X,
+    /// The channel is low.
     Low,
+    /// The channel is high.
     High,
+    /// The channel goes from low to high.
     Rising,
+    /// The channel goes from high to low.
     Falling,
     /// Any edge.
     Either,
 }
 
 impl Cond {
+    /// All conditions, in the order the user interface offers them.
     pub const ALL: [Cond; 6] = [
         Cond::X,
         Cond::Low,
@@ -50,6 +55,7 @@ impl Cond {
         Cond::Either,
     ];
 
+    /// Short label for the user interface.
     pub fn label(self) -> &'static str {
         match self {
             Cond::X => "X",
@@ -61,6 +67,7 @@ impl Cond {
         }
     }
 
+    /// What the condition means, in words.
     pub fn describe(self) -> &'static str {
         match self {
             Cond::X => "don't care",

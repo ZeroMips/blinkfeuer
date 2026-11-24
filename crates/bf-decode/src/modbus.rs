@@ -42,6 +42,7 @@ pub fn crc16(bytes: &[u8]) -> u16 {
     crc
 }
 
+/// Name of a function code (the exception bit is ignored).
 pub fn function_name(fc: u8) -> Option<&'static str> {
     Some(match fc & 0x7F {
         1 => "Read Coils",
@@ -67,6 +68,7 @@ pub fn function_name(fc: u8) -> Option<&'static str> {
     })
 }
 
+/// Name of an exception code.
 pub fn exception_name(code: u8) -> Option<&'static str> {
     Some(match code {
         1 => "Illegal Function",
@@ -139,8 +141,11 @@ pub fn label(a: &Annotation, fmt: Format) -> String {
 /// One field of a frame: `bytes` indexes into the frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Field {
+    /// What the field is.
     pub kind: Kind,
+    /// Its bytes in the frame.
     pub bytes: Range<usize>,
+    /// Its value.
     pub value: u32,
 }
 
@@ -259,6 +264,7 @@ impl Default for ModbusRtu {
 }
 
 impl ModbusRtu {
+    /// A layer waiting for the first frame.
     pub fn new() -> Self {
         Self {
             t35: 0,

@@ -27,10 +27,13 @@ use std::time::{Duration, Instant};
 
 /// Saleae Logic and its clones before the firmware is loaded.
 pub const VID_SALEAE: u16 = 0x0925;
+/// See [`VID_SALEAE`].
 pub const PID_SALEAE: u16 = 0x3881;
 /// Generic FX2 boards running fx2lafw.
 pub const VID_FX2LAFW: u16 = 0x1D50;
+/// See [`VID_FX2LAFW`].
 pub const PID_FX2LAFW: u16 = 0x608C;
+/// File name of the firmware for the Saleae Logic and its clones.
 pub const FIRMWARE_SALEAE: &str = "fx2lafw-saleae-logic.fw";
 
 const EP_IN: u8 = 0x82;
@@ -55,6 +58,7 @@ const RENUM_TIMEOUT: Duration = Duration::from_secs(20);
 const IDLE_LIMIT: Duration = Duration::from_secs(1);
 const CONTROL_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// The samplerates offered, in Hz (ascending).
 pub const RATES: [f64; 16] = [
     20e3, 25e3, 50e3, 100e3, 200e3, 250e3, 500e3, 1e6, 2e6, 3e6, 4e6, 6e6, 8e6, 12e6, 16e6, 24e6,
 ];
@@ -62,8 +66,12 @@ pub const RATES: [f64; 16] = [
 // ------------------------------------------------------------------------------------------------
 // Protocol (generic over the control transport so it can be tested without hardware).
 
+/// Vendor control transfers to the device (abstract, so the protocol can be tested without
+/// hardware).
 pub trait ControlIo {
+    /// Send `data` with vendor request `request` and `wValue` `value`.
     fn vendor_out(&mut self, request: u8, value: u16, data: &[u8]) -> Result<(), DeviceError>;
+    /// Read up to `len` bytes with vendor request `request` and `wValue` `value`.
     fn vendor_in(&mut self, request: u8, value: u16, len: u16) -> Result<Vec<u8>, DeviceError>;
 }
 
@@ -83,6 +91,7 @@ pub fn upload_firmware<C: ControlIo>(c: &mut C, image: &[u8]) -> Result<(), Devi
     c.vendor_out(REQ_FIRMWARE_LOAD, REG_CPUCS, &[0])
 }
 
+/// Version of the running firmware: (major, minor).
 pub fn firmware_version<C: ControlIo>(c: &mut C) -> Result<(u8, u8), DeviceError> {
     let v = c.vendor_in(CMD_GET_FW_VERSION, 0, 2)?;
     match v[..] {
@@ -111,6 +120,7 @@ pub fn start_command(rate_hz: f64) -> Result<[u8; 3], DeviceError> {
     Ok([flags, (delay >> 8) as u8, delay as u8])
 }
 
+/// Start the acquisition at `rate_hz`.
 pub fn start<C: ControlIo>(c: &mut C, rate_hz: f64) -> Result<(), DeviceError> {
     c.vendor_out(CMD_START, 0, &start_command(rate_hz)?)
 }
@@ -132,6 +142,7 @@ pub fn firmware_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// The first file called `name` in [`firmware_dirs`].
 pub fn find_firmware(name: &str) -> Result<PathBuf, DeviceError> {
     firmware_dirs()
         .into_iter()
@@ -205,6 +216,7 @@ fn is_blank(d: &nusb::DeviceInfo) -> bool {
     d.vendor_id() == VID_SALEAE && d.product_id() == PID_SALEAE && !is_running(d)
 }
 
+/// Whether these USB string descriptors are those of a running fx2lafw firmware.
 pub fn has_fx2lafw_strings(manufacturer: Option<&str>, product: Option<&str>) -> bool {
     manufacturer == Some("sigrok") && product == Some("fx2lafw")
 }

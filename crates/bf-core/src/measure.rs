@@ -12,9 +12,13 @@ pub const MAX_EDGES: u64 = 2_000_000;
 /// Count, smallest, largest and total of some durations (in samples).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stat {
+    /// How many durations were added.
     pub count: u64,
+    /// The shortest (0 if there were none).
     pub min: u64,
+    /// The longest (0 if there were none).
     pub max: u64,
+    /// Their total.
     pub sum: u64,
 }
 
@@ -40,10 +44,13 @@ impl Stat {
 /// What the edges of the range say.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Detail {
+    /// Rising edges.
     pub rising: u64,
+    /// Falling edges.
     pub falling: u64,
     /// Samples spent high and low (the partial segments at both ends count).
     pub high_samples: u64,
+    /// See `high_samples`.
     pub low_samples: u64,
     /// Time between consecutive rising edges (falling edges if there are fewer than two rising ones).
     pub period: Stat,
@@ -53,10 +60,12 @@ pub struct Detail {
     pub low: Stat,
 }
 
+/// The result of [`measure`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Measurement {
     /// The range measured (clipped to the stored samples).
     pub start: u64,
+    /// One past the last sample measured.
     pub end: u64,
     /// Level of the first sample.
     pub initial_high: bool,
@@ -67,6 +76,7 @@ pub struct Measurement {
 }
 
 impl Measurement {
+    /// Length of the range in samples.
     pub fn samples(&self) -> u64 {
         self.end - self.start
     }

@@ -35,7 +35,9 @@ use nusb::transfer::{Bulk, ControlIn, ControlOut, ControlType, In, Recipient};
 use nusb::{Interface, MaybeFuture, Speed};
 use std::time::{Duration, Instant};
 
+/// USB vendor id.
 pub const VID: u16 = 0x1D50;
+/// USB product id.
 pub const PID: u16 = 0x605A;
 /// Other devices of the USB3-PIPE project may share the vendor and product id: the product string tells.
 pub const PRODUCT: &str = "SLogic16U3 LiteX";
@@ -46,29 +48,41 @@ const IDLE_LIMIT: Duration = Duration::from_secs(1);
 
 /// Register addresses (bytes), the fixed CSR map of the gateware.
 pub mod reg {
+    /// Reads [`MAGIC`]; version, configuration and base rate follow.
     pub const ANALYZER_MAGIC: u32 = 0x0800;
+    /// Enable bit, channel mode and pattern.
     pub const ANALYZER_CONTROL: u32 = 0x0810;
+    /// Divider of the base rate.
     pub const ANALYZER_DIVIDER: u32 = 0x0814;
     /// 64 bit.
     pub const ANALYZER_LIMIT: u32 = 0x0818;
+    /// The `STATUS_*` bits.
     pub const ANALYZER_STATUS: u32 = 0x0820;
     /// 64 bit.
     pub const ANALYZER_COUNT: u32 = 0x0824;
+    /// Identification text, one character per word.
     pub const IDENTIFIER_BASE: u32 = 0x2000;
 
     /// "SLOG".
     pub const MAGIC: u32 = 0x534c_4f47;
 
+    /// Control: capture.
     pub const CONTROL_ENABLE: u32 = 1 << 0;
+    /// Control: the channel mode field (see [`mode_code`](super::mode_code)).
     pub const fn control_mode(m: u32) -> u32 {
         (m & 0x3) << 4
     }
+    /// Control: the pattern field (see [`pattern_code`](super::pattern_code)).
     pub const fn control_pattern(p: u32) -> u32 {
         (p & 0x3) << 8
     }
+    /// Status: capturing.
     pub const STATUS_RUNNING: u32 = 1 << 0;
+    /// Status: the capture is complete.
     pub const STATUS_DONE: u32 = 1 << 1;
+    /// Status: samples were lost.
     pub const STATUS_OVERFLOW: u32 = 1 << 2;
+    /// Status: error.
     pub const STATUS_ERROR: u32 = 1 << 3;
 }
 
@@ -77,15 +91,19 @@ pub mod reg {
 
 /// Access to the SoC bus of the gateware.
 pub trait Bus {
+    /// Read consecutive words from byte address `addr`.
     fn read_burst(&mut self, addr: u32, out: &mut [u32]) -> Result<(), DeviceError>;
+    /// Write consecutive words from byte address `addr`.
     fn write_burst(&mut self, addr: u32, vals: &[u32]) -> Result<(), DeviceError>;
 
+    /// Read one word.
     fn read32(&mut self, addr: u32) -> Result<u32, DeviceError> {
         let mut v = [0u32];
         self.read_burst(addr, &mut v)?;
         Ok(v[0])
     }
 
+    /// Write one word.
     fn write32(&mut self, addr: u32, value: u32) -> Result<(), DeviceError> {
         self.write_burst(addr, &[value])
     }
@@ -97,6 +115,7 @@ pub trait Bus {
         Ok((v[0] as u64) << 32 | v[1] as u64)
     }
 
+    /// Most significant word first.
     fn write64(&mut self, addr: u32, value: u64) -> Result<(), DeviceError> {
         self.write_burst(addr, &[(value >> 32) as u32, value as u32])
     }
@@ -104,7 +123,9 @@ pub trait Bus {
 
 /// One EP0 transfer of at most `MAX_WORDS` words.
 pub trait Ep0 {
+    /// Read `len` bytes (`value` and `index`: see [`control_fields`]).
     fn read(&mut self, value: u16, index: u16, len: usize) -> Result<Vec<u8>, DeviceError>;
+    /// Write `data` (`value` and `index`: see [`control_fields`]).
     fn write(&mut self, value: u16, index: u16, data: &[u8]) -> Result<(), DeviceError>;
 }
 
@@ -190,8 +211,10 @@ impl Ep0 for UsbEp0 {
 // ------------------------------------------------------------------------------------------------
 // What the gateware says about itself, and the configuration derived from it.
 
+/// What the gateware reports about itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Info {
+    /// Version of the register interface (major in the upper 16 bits).
     pub version: u32,
     /// Channels the gateware samples.
     pub nchannels: u32,
@@ -201,6 +224,7 @@ pub struct Info {
     pub fifo_words: u32,
     /// Sample rate before the divider, in Hz.
     pub base_rate: u32,
+    /// Identification text.
     pub ident: String,
 }
 
@@ -287,6 +311,7 @@ pub fn samplerates(info: &Info, channels: u8) -> Vec<f64> {
     rates.into_iter().map(|r| r as f64).collect()
 }
 
+/// What a gateware with this identification can do.
 pub fn capabilities(info: &Info) -> Capabilities {
     let modes: Vec<ChannelMode> = [4u8, 8, 16]
         .into_iter()
@@ -328,6 +353,7 @@ pub fn divider_for(info: &Info, cfg: &CaptureConfig) -> Result<u32, DeviceError>
     Ok(divider as u32)
 }
 
+/// Register code of a channel count.
 pub fn mode_code(channels: u8) -> Result<u32, DeviceError> {
     match channels {
         4 => Ok(0),
@@ -339,6 +365,7 @@ pub fn mode_code(channels: u8) -> Result<u32, DeviceError> {
     }
 }
 
+/// Register code of a pattern.
 pub fn pattern_code(p: Pattern) -> Result<u32, DeviceError> {
     match p {
         Pattern::Inputs => Ok(0),
@@ -365,16 +392,22 @@ pub fn configure<B: Bus>(
     Ok(control)
 }
 
+/// State of the capture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Status {
+    /// Capturing.
     pub running: bool,
+    /// The capture is complete.
     pub done: bool,
+    /// Samples were lost.
     pub overflow: bool,
+    /// The gateware reports an error.
     pub error: bool,
     /// Samples the gateware has captured.
     pub samples: u64,
 }
 
+/// Read the state of the capture.
 pub fn status<B: Bus>(bus: &mut B) -> Result<Status, DeviceError> {
     let s = bus.read32(reg::ANALYZER_STATUS)?;
     let samples = bus.read64(reg::ANALYZER_COUNT)?;

@@ -5,11 +5,14 @@ use crate::uart::{Parity, UartConfig};
 
 /// A multi-channel waveform as one state word per sample.
 pub struct Wave {
+    /// Samples per second.
     pub rate: f64,
+    /// State word of each sample.
     pub samples: Vec<u32>,
 }
 
 impl Wave {
+    /// A waveform of `len` samples that all have the state `init`.
     pub fn new(rate: f64, len: usize, init: u32) -> Self {
         Self {
             rate,
@@ -140,6 +143,8 @@ impl Wave {
         t
     }
 
+    /// I2C STOP at sample `t` (`q`: a quarter of a bit time in samples). Returns the sample after
+    /// it.
     pub fn i2c_stop(&mut self, scl: u8, sda: u8, t: u64, q: u64) -> u64 {
         self.set(scl, t, t + q, false);
         self.set(sda, t, t + 2 * q, false);

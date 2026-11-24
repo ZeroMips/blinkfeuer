@@ -13,7 +13,9 @@ use nusb::transfer::{Bulk, ControlIn, ControlOut, ControlType, In, Recipient, Tr
 use nusb::{Endpoint, Interface, MaybeFuture, Speed};
 use std::time::{Duration, Instant};
 
+/// USB vendor id.
 pub const VID: u16 = 0x359F;
+/// USB product id of the SLogic16U3.
 pub const PID_16U3: u16 = 0x3031;
 const EP_IN: u8 = 0x82;
 
@@ -39,8 +41,11 @@ const CONTROL_TIMEOUT: Duration = Duration::from_millis(500);
 // ------------------------------------------------------------------------------------------------
 // Register protocol (generic over the register transport so it can be tested without hardware).
 
+/// 32-bit register access.
 pub trait RegIo {
+    /// Read the register at `addr`.
     fn read32(&mut self, addr: u16) -> Result<u32, DeviceError>;
+    /// Write the register at `addr`.
     fn write32(&mut self, addr: u16, value: u32) -> Result<(), DeviceError>;
 }
 
@@ -86,6 +91,7 @@ fn aux_set_word<R: RegIo>(r: &mut R, cmd: u32, value: u32, what: &str) -> Result
     Ok(())
 }
 
+/// Capture the first `channels` channels.
 pub fn set_channels<R: RegIo>(r: &mut R, channels: u8) -> Result<(), DeviceError> {
     let mask = if channels >= 32 {
         u32::MAX
@@ -140,6 +146,7 @@ pub fn vref_code(volts: f64) -> u32 {
     (volts / 3.33 / 2.0 * 1024.0).round().clamp(0.0, 1023.0) as u32
 }
 
+/// Register code of a pattern.
 pub fn pattern_code(p: Pattern) -> Result<u32, DeviceError> {
     match p {
         Pattern::Inputs => Ok(0),
@@ -151,10 +158,12 @@ pub fn pattern_code(p: Pattern) -> Result<u32, DeviceError> {
     }
 }
 
+/// Set the input threshold.
 pub fn set_vref<R: RegIo>(r: &mut R, volts: f64) -> Result<(), DeviceError> {
     aux_set_word(r, AUX_VREF, vref_code(volts), "threshold")
 }
 
+/// Select the inputs or a test pattern.
 pub fn set_pattern<R: RegIo>(r: &mut R, p: Pattern) -> Result<(), DeviceError> {
     aux_set_word(r, AUX_TEST, pattern_code(p)?, "test pattern")?;
     if p == Pattern::Inputs {
@@ -163,6 +172,7 @@ pub fn set_pattern<R: RegIo>(r: &mut R, p: Pattern) -> Result<(), DeviceError> {
     Ok(())
 }
 
+/// Pulse the reset bit.
 pub fn reset<R: RegIo>(r: &mut R) -> Result<(), DeviceError> {
     r.write32(R_CTRL, CTRL_RST)?;
     r.write32(R_CTRL, 0)
@@ -179,6 +189,7 @@ pub fn configure<R: RegIo>(r: &mut R, cfg: &CaptureConfig) -> Result<(), DeviceE
 // ------------------------------------------------------------------------------------------------
 // Transfer planning and sample accounting.
 
+/// Geometry of the ring of USB transfers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingPlan {
     /// Bytes per transfer.
@@ -225,6 +236,7 @@ pub struct Accounting {
 }
 
 impl Accounting {
+    /// Drop the first `first_drop` bytes, then deliver `limit_bytes` (`None`: without end).
     pub fn new(first_drop: usize, limit_bytes: Option<u64>) -> Self {
         Self {
             drop_left: first_drop,

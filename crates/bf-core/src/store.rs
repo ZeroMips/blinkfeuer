@@ -22,13 +22,16 @@ use std::sync::Arc;
 /// A change of the sample state: `state` is the full state of sample `off` (relative to its chunk).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Event {
+    /// Sample offset from the start of the chunk.
     pub off: u32,
+    /// State word from this sample on.
     pub state: u32,
 }
 
 /// Store parameters.
 #[derive(Clone, Debug)]
 pub struct StoreConfig {
+    /// Channels per sample.
     pub channels: ChannelCount,
     /// Samples per second (used for time conversions only).
     pub sample_rate: f64,
@@ -43,6 +46,7 @@ pub struct StoreConfig {
 }
 
 impl StoreConfig {
+    /// The default block and chunk sizes, with a cap of 1 GiB.
     pub fn new(channels: ChannelCount, sample_rate: f64) -> Self {
         Self {
             channels,
@@ -143,6 +147,7 @@ pub struct Column {
     pub edges: u32,
 }
 
+/// A store shared between the capture thread (writing) and its readers.
 pub type SharedStore = Arc<RwLock<CaptureStore>>;
 
 /// See the module documentation.
@@ -159,6 +164,8 @@ pub struct CaptureStore {
 }
 
 impl CaptureStore {
+    /// An empty store. Panics if the block or chunk size does not meet the rules of
+    /// [`StoreConfig`].
     pub fn new(cfg: StoreConfig) -> Self {
         assert!(
             cfg.block_samples.is_power_of_two(),
@@ -193,18 +200,22 @@ impl CaptureStore {
         Arc::new(RwLock::new(self))
     }
 
+    /// An empty store in the shared form.
     pub fn shared(cfg: StoreConfig) -> SharedStore {
         Arc::new(RwLock::new(Self::new(cfg)))
     }
 
+    /// The parameters the store was made with.
     pub fn config(&self) -> &StoreConfig {
         &self.cfg
     }
 
+    /// Channels per sample.
     pub fn channels(&self) -> u8 {
         self.cfg.channels.get()
     }
 
+    /// Samples per second.
     pub fn sample_rate(&self) -> f64 {
         self.cfg.sample_rate
     }
@@ -225,6 +236,7 @@ impl CaptureStore {
         self.trigger
     }
 
+    /// Note the sample at which the trigger fired.
     pub fn set_trigger(&mut self, sample: Option<u64>) {
         self.trigger = sample;
         self.generation += 1;
@@ -253,14 +265,17 @@ impl CaptureStore {
         self.open.end()
     }
 
+    /// Whether no samples are stored.
     pub fn is_empty(&self) -> bool {
         self.end() == self.first_sample()
     }
 
+    /// The stored samples.
     pub fn range(&self) -> Range<u64> {
         self.first_sample()..self.end()
     }
 
+    /// Memory used by the chunks.
     pub fn memory_bytes(&self) -> usize {
         self.sealed_bytes + self.open.bytes()
     }
@@ -270,6 +285,7 @@ impl CaptureStore {
         self.sealed.iter().map(|c| c.events.len()).sum::<usize>() + self.open.events.len()
     }
 
+    /// Time of `sample` in seconds, counted from sample 0.
     pub fn time_of(&self, sample: u64) -> f64 {
         sample as f64 / self.cfg.sample_rate
     }

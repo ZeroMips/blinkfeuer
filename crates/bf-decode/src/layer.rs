@@ -10,6 +10,7 @@ use crate::{flag, Annotation, Kind};
 /// Timing of the character stream a layer is fed with.
 #[derive(Clone, Copy, Debug)]
 pub struct CharTiming {
+    /// Samples per second.
     pub sample_rate: f64,
     /// Samples per bit.
     pub bit: f64,
@@ -18,6 +19,7 @@ pub struct CharTiming {
 }
 
 impl CharTiming {
+    /// Bits per second.
     pub fn baud(&self) -> f64 {
         self.sample_rate / self.bit
     }
@@ -28,6 +30,7 @@ impl CharTiming {
     }
 }
 
+/// What is done with the characters of a UART (see the module documentation).
 pub trait ByteLayer: Send {
     /// All lanes of the decoder with this layer, lane 0 being the characters.
     fn lanes(&self) -> &'static [&'static str];
@@ -62,6 +65,8 @@ struct Tele {
 }
 
 impl Telegrams {
+    /// `enabled`: draw telegrams at all; `gap_bits`: idle bit times that end one; `end_at_lf`: a
+    /// line feed ends one too.
     pub fn new(enabled: bool, gap_bits: f64, end_at_lf: bool) -> Self {
         Self {
             enabled,

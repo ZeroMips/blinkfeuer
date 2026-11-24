@@ -6,7 +6,9 @@ use std::ops::Range;
 
 /// A channel to export and the name it gets.
 pub struct VcdSignal {
+    /// Channel of the store.
     pub channel: u8,
+    /// Name in the file.
     pub name: String,
 }
 

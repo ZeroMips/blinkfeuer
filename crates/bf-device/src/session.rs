@@ -31,6 +31,7 @@ pub enum TriggerKind {
 
 /// A trigger and the window around it, for [`Session::start_triggered`].
 pub struct TriggerPlan {
+    /// What fires it.
     pub kind: TriggerKind,
     /// Samples kept before the trigger sample (the trigger is armed once they are there).
     pub pre: u64,
@@ -39,6 +40,7 @@ pub struct TriggerPlan {
 }
 
 impl TriggerPlan {
+    /// A plan for a level and edge trigger.
     pub fn pattern(trigger: Trigger, pre: u64, post: Option<u64>) -> Self {
         Self {
             kind: TriggerKind::Pattern(trigger),
@@ -48,10 +50,14 @@ impl TriggerPlan {
     }
 }
 
+/// Progress of a running session, updated by its thread.
 #[derive(Default)]
 pub struct SessionStats {
+    /// Wire bytes received.
     pub bytes: AtomicU64,
+    /// Samples received.
     pub samples: AtomicU64,
+    /// The capture thread is at work.
     pub running: AtomicBool,
     phase: AtomicU8,
     force: AtomicBool,
@@ -61,6 +67,7 @@ pub struct SessionStats {
 }
 
 impl SessionStats {
+    /// How far a triggered capture has come.
     pub fn phase(&self) -> Phase {
         match self.phase.load(Ordering::Relaxed) {
             1 => Phase::Filling,
@@ -221,15 +228,22 @@ impl Gate {
     }
 }
 
+/// How a session ended.
 #[derive(Debug)]
 pub struct SessionResult {
+    /// Samples received.
     pub samples: u64,
+    /// Wire bytes received.
     pub bytes: u64,
+    /// How long the session ran.
     pub elapsed: Duration,
+    /// The backend's summary.
     pub report: StreamReport,
+    /// What ended the capture, if it was an error.
     pub error: Option<DeviceError>,
 }
 
+/// A capture running on its own thread.
 pub struct Session {
     stop: Arc<AtomicBool>,
     stats: Arc<SessionStats>,
@@ -318,10 +332,12 @@ impl Session {
         })
     }
 
+    /// Progress of the capture.
     pub fn stats(&self) -> &SessionStats {
         &self.stats
     }
 
+    /// Whether the capture thread is still at work.
     pub fn is_running(&self) -> bool {
         self.stats.running.load(Ordering::SeqCst)
     }

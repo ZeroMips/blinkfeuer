@@ -6,6 +6,8 @@
 //! live decoding works) and allocation free per edge; annotations are small `Copy` records whose text
 //! is only produced when something is drawn.
 
+#![warn(missing_docs)]
+
 pub mod baud;
 pub mod engine;
 pub mod framing;
@@ -27,7 +29,9 @@ pub enum Kind {
     Data,
     /// I2C address byte: `value` is the 7-bit address, [`flag::READ`] the direction.
     Address,
+    /// I2C START; [`flag::REPEATED`] if inside a transaction.
     Start,
+    /// I2C STOP.
     Stop,
     /// A whole transaction (SPI chip select assertion): `value` is the number of words.
     Frame,
@@ -37,18 +41,21 @@ pub enum Kind {
     /// A Modbus RTU frame: `value` is `address << 8 | function code`, `bits` says whether it is a
     /// request ([`modbus::REQUEST`]), a response ([`modbus::RESPONSE`]) or unknown (0).
     ModbusFrame,
-    /// Modbus fields (one per field of a frame, on the fields lane).
+    /// Modbus slave address. This and the following kinds are the fields of a frame (fields lane).
     ModbusAddress,
+    /// Modbus function code (bit 7 set: exception response).
     ModbusFunction,
     /// First register (or coil) address of a request.
     ModbusRegister,
     /// Number of registers or coils.
     ModbusQuantity,
+    /// Number of data bytes that follow.
     ModbusByteCount,
     /// A 16-bit register value.
     ModbusValue,
     /// A data byte (coil and input bits, or the payload of other functions).
     ModbusData,
+    /// Modbus exception code.
     ModbusException,
     /// The CRC as transmitted (low byte first on the wire, shown as one 16-bit value).
     ModbusCrc,
@@ -56,8 +63,11 @@ pub enum Kind {
 
 /// Bits of [`Annotation::flags`].
 pub mod flag {
+    /// UART: the stop bit is not at the idle level.
     pub const FRAMING: u8 = 1;
+    /// UART: the parity bit is wrong.
     pub const PARITY: u8 = 2;
+    /// UART: all data bits and the stop bit are low.
     pub const BREAK: u8 = 4;
     /// A word cut short by the end of a transaction.
     pub const INCOMPLETE: u8 = 8;
@@ -76,17 +86,24 @@ pub mod flag {
 /// A decoded item covering samples `start..end` on one lane of its decoder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Annotation {
+    /// First sample.
     pub start: u64,
+    /// One past the last sample.
     pub end: u64,
+    /// The decoded value (what it means depends on `kind`).
     pub value: u32,
+    /// Lane of the decoder it belongs to.
     pub lane: u8,
+    /// What it is.
     pub kind: Kind,
     /// Number of data bits in `value`.
     pub bits: u8,
+    /// Bits of [`flag`].
     pub flags: u8,
 }
 
 impl Annotation {
+    /// Whether a flag of [`flag::ERROR`] is set.
     pub fn is_error(&self) -> bool {
         self.flags & flag::ERROR != 0
     }
@@ -95,15 +112,21 @@ impl Annotation {
 /// How data values are shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Format {
+    /// Hexadecimal, padded to the word width.
     Hex,
+    /// Decimal.
     Dec,
+    /// Binary, padded to the word width.
     Bin,
+    /// Characters (escapes or hex for the ones that cannot be shown).
     Ascii,
 }
 
 impl Format {
+    /// All formats, in the order the user interface offers them.
     pub const ALL: [Format; 4] = [Format::Hex, Format::Dec, Format::Bin, Format::Ascii];
 
+    /// Name for the user.
     pub fn label(self) -> &'static str {
         match self {
             Format::Hex => "Hex",
@@ -237,30 +260,36 @@ impl Annotation {
 /// overlap, so a visible range is found by binary search.
 #[derive(Clone, Debug, Default)]
 pub struct AnnStore {
+    /// The annotations of each lane.
     pub lanes: Vec<Vec<Annotation>>,
 }
 
 impl AnnStore {
+    /// An empty store with this many lanes.
     pub fn new(lanes: usize) -> Self {
         Self {
             lanes: vec![Vec::new(); lanes],
         }
     }
 
+    /// Append an annotation to its lane (ignored if there is no such lane).
     pub fn push(&mut self, a: Annotation) {
         if let Some(l) = self.lanes.get_mut(a.lane as usize) {
             l.push(a);
         }
     }
 
+    /// Forget all annotations.
     pub fn clear(&mut self) {
         self.lanes.iter_mut().for_each(Vec::clear);
     }
 
+    /// Annotations in all lanes.
     pub fn len(&self) -> usize {
         self.lanes.iter().map(Vec::len).sum()
     }
 
+    /// Whether there are no annotations.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -291,6 +320,7 @@ impl AnnStore {
 /// look at a level at some later instant (UART sampling) keeps that instant pending and resolves it
 /// from [`Decoder::change`] / [`Decoder::advance`], which say that nothing changed before `t`.
 pub trait Decoder: Send {
+    /// Name of the protocol.
     fn name(&self) -> &'static str;
     /// Names of the annotation lanes.
     fn lanes(&self) -> &'static [&'static str];

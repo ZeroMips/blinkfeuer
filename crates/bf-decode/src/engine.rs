@@ -21,6 +21,7 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// A runner that has not decoded anything yet.
     pub fn new(decoder: Box<dyn Decoder>) -> Self {
         Self {
             decoder,
@@ -29,6 +30,7 @@ impl Runner {
         }
     }
 
+    /// The decoder it runs.
     pub fn decoder(&self) -> &dyn Decoder {
         self.decoder.as_ref()
     }
@@ -89,16 +91,22 @@ pub fn decode_all(decoder: Box<dyn Decoder>, store: &CaptureStore) -> Vec<Annota
     out
 }
 
+/// Identifies a decoder within its [`Engine`] (never reused).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DecoderId(pub u32);
 
 /// What the UI keeps for a decoder: its annotations and how far it has come.
 #[derive(Clone)]
 pub struct DecoderHandle {
+    /// Identifies the decoder.
     pub id: DecoderId,
+    /// Name of the protocol.
     pub name: &'static str,
+    /// Names of the annotation lanes.
     pub lanes: &'static [&'static str],
+    /// For each lane whether anything is ever drawn on it.
     pub lane_used: Vec<bool>,
+    /// What has been decoded so far (the engine adds to it).
     pub anns: Arc<RwLock<AnnStore>>,
     progress: Arc<AtomicU64>,
 }
@@ -137,6 +145,7 @@ impl Default for Engine {
 }
 
 impl Engine {
+    /// An engine without decoders or a capture; starts the decoding thread.
     pub fn new() -> Self {
         let shared = Arc::new(Shared {
             store: Mutex::new(None),
@@ -162,6 +171,7 @@ impl Engine {
         }
     }
 
+    /// Run `decoder` over the current capture, from its beginning.
     pub fn add(&self, decoder: Box<dyn Decoder>) -> DecoderHandle {
         let id = DecoderId(self.shared.next_id.fetch_add(1, Ordering::Relaxed));
         let lanes = decoder.lanes();
@@ -185,6 +195,7 @@ impl Engine {
         handle
     }
 
+    /// Stop running a decoder.
     pub fn remove(&self, id: DecoderId) {
         self.shared.slots.lock().retain(|s| s.id != id);
     }

@@ -2,10 +2,13 @@
 
 use crate::{bit, flag, Annotation, Decoder, Kind};
 
+/// Settings of the I2C decoder.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct I2cConfig {
+    /// Channel of the clock.
     pub scl: u8,
+    /// Channel of the data line.
     pub sda: u8,
 }
 
@@ -22,6 +25,7 @@ struct Pending {
     address: bool,
 }
 
+/// The I2C decoder.
 pub struct I2c {
     cfg: I2cConfig,
     primed: bool,
@@ -37,6 +41,7 @@ pub struct I2c {
 }
 
 impl I2c {
+    /// A decoder with these settings.
     pub fn new(cfg: I2cConfig) -> Self {
         Self {
             cfg,
@@ -52,6 +57,7 @@ impl I2c {
         }
     }
 
+    /// Its settings.
     pub fn config(&self) -> &I2cConfig {
         &self.cfg
     }

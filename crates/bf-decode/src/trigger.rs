@@ -21,19 +21,36 @@ use serde::{Deserialize, Serialize};
 pub enum PatItem {
     /// A data value (UART character, SPI word, I2C data byte) whose bits set in `care` equal those
     /// of `value` (all bits set: exactly `value`).
-    Char { value: u32, care: u32 },
+    Char {
+        /// The bits to compare with.
+        value: u32,
+        /// Which bits are compared.
+        care: u32,
+    },
     /// An I2C data byte as `Char` that was not acknowledged.
-    CharNak { value: u32, care: u32 },
+    CharNak {
+        /// The bits to compare with.
+        value: u32,
+        /// Which bits are compared.
+        care: u32,
+    },
     /// An I2C address (7 bits) as `Char`; `read`: `Some(true)` only reads, `Some(false)` only
     /// writes; `nak`: it must not have been acknowledged.
     Address {
+        /// The bits to compare with.
         value: u32,
+        /// Which bits are compared.
         care: u32,
+        /// The direction, if it matters: read or write.
         read: Option<bool>,
+        /// Only if not acknowledged.
         nak: bool,
     },
     /// An I2C START; `repeated`: only a repeated START.
-    Start { repeated: bool },
+    Start {
+        /// Only a repeated START.
+        repeated: bool,
+    },
     /// An I2C STOP.
     Stop,
     /// Any number of items, also none.
@@ -166,12 +183,22 @@ impl PatternSearch {
 pub enum UartMatch {
     /// Characters matching `items` one after the other (a gap item skips any number of them); with
     /// `or_error` also any character with a framing or parity error or a break.
-    Pattern { items: Vec<PatItem>, or_error: bool },
+    Pattern {
+        /// The pattern.
+        items: Vec<PatItem>,
+        /// Also fire on a character error.
+        or_error: bool,
+    },
     /// A framing error, a parity error or a break.
     Error,
     /// Modbus RTU frames (the UART decoder runs with the Modbus protocol) that begin with bytes
     /// matching `items`; with `or_bad` also any frame with a bad CRC or a character error.
-    ModbusFrames { items: Vec<PatItem>, or_bad: bool },
+    ModbusFrames {
+        /// The bytes a frame begins with.
+        items: Vec<PatItem>,
+        /// Also fire on a bad frame.
+        or_bad: bool,
+    },
 }
 
 impl UartMatch {
@@ -192,9 +219,12 @@ impl UartMatch {
     }
 }
 
+/// A data line of an SPI bus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpiLane {
+    /// Master to slave.
     Mosi,
+    /// Slave to master.
     Miso,
 }
 
@@ -202,8 +232,11 @@ pub enum SpiLane {
 /// word cut short by the end of the transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpiMatch {
+    /// The line to look at.
     pub lane: SpiLane,
+    /// The pattern.
     pub items: Vec<PatItem>,
+    /// Also fire on a word cut short.
     pub or_incomplete: bool,
 }
 
@@ -227,7 +260,9 @@ impl SpiMatch {
 /// `or_nak` also any byte that was not acknowledged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct I2cMatch {
+    /// The pattern.
     pub items: Vec<PatItem>,
+    /// Also fire on any byte that was not acknowledged.
     pub or_nak: bool,
 }
 
@@ -245,6 +280,7 @@ impl I2cMatch {
         Self::pattern(vec![PatItem::Start { repeated: false }], false)
     }
 
+    /// Any STOP condition.
     pub fn stop() -> Self {
         Self::pattern(vec![PatItem::Stop], false)
     }
@@ -290,10 +326,14 @@ pub enum TriggerAt {
     End,
 }
 
+/// A trigger on decoded data: the decoder settings and what to look for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProtocolTrigger {
+    /// On a UART.
     Uart(UartConfig, UartMatch),
+    /// On an SPI bus.
     Spi(SpiConfig, SpiMatch),
+    /// On an I2C bus.
     I2c(I2cConfig, I2cMatch),
 }
 
