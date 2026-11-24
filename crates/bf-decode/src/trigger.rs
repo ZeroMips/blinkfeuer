@@ -139,7 +139,7 @@ impl PatternSearch {
     /// Feed item number `index`: the index of the first item of the match it completes, if any.
     /// Matches do not overlap: after one, the search starts afresh (like "find all").
     pub fn feed(&mut self, index: usize, a: &Annotation) -> Option<usize> {
-        let hit = step_pattern(&self.items, &mut self.active, a, index);
+        let hit = step_pattern(&self.items, &mut self.active, a, index, true);
         if hit.is_some() {
             self.active.clear();
         }
@@ -337,38 +337,18 @@ struct Matcher {
 
 /// Whether `seq` begins with a match of `items` (the match may end before `seq` does).
 fn matches_from_start(items: &[PatItem], seq: &[Annotation]) -> bool {
-    // States: items matched so far; a gap may also match nothing.
-    fn add(items: &[PatItem], states: &mut Vec<usize>, i: usize) {
-        if !states.contains(&i) {
-            states.push(i);
-        }
-        if items.get(i) == Some(&PatItem::Gap) {
-            add(items, states, i + 1);
-        }
-    }
     if items.is_empty() {
         return true;
     }
-    let mut states = Vec::new();
-    add(items, &mut states, 0);
-    for c in seq {
-        let mut next = Vec::new();
-        for &i in &states {
-            match items[i] {
-                PatItem::Gap => add(items, &mut next, i),
-                ref item if item.matches(c) => {
-                    if i + 1 == items.len() {
-                        return true;
-                    }
-                    add(items, &mut next, i + 1);
-                }
-                _ => {}
-            }
+    let mut active = Vec::new();
+    for (i, c) in seq.iter().enumerate() {
+        // Only the first item may begin a match.
+        if step_pattern(items, &mut active, c, i, i == 0).is_some() {
+            return true;
         }
-        if next.is_empty() {
+        if active.is_empty() {
             return false;
         }
-        states = next;
     }
     false
 }
@@ -431,7 +411,7 @@ impl DecoderTrigger {
             } else if m.items.is_empty() {
                 None
             } else {
-                step_pattern(&m.items, &mut m.active, &a, a.start)
+                step_pattern(&m.items, &mut m.active, &a, a.start, true)
             };
             if let (Some(b), None) = (begins, hit) {
                 hit = Some(match self.at {
@@ -446,11 +426,14 @@ impl DecoderTrigger {
 
 /// Feed item `c` (which begins at `here`: a sample, or an index) to the partial matches of `items`:
 /// where a completed match began (the latest start, i.e. the shortest match) if `c` completes one.
+/// With `may_begin` a new match can also begin at `c` (always, except for a match anchored at the
+/// first item).
 fn step_pattern<T: Copy + Ord>(
     items: &[PatItem],
     active: &mut Vec<(usize, T)>,
     c: &Annotation,
     here: T,
+    may_begin: bool,
 ) -> Option<T> {
     // Add state `i` (and, past a gap that may match nothing, the following ones), keeping the latest
     // start per position.
@@ -464,7 +447,9 @@ fn step_pattern<T: Copy + Ord>(
         }
     }
     let mut current = std::mem::take(active);
-    add(items, &mut current, 0, here);
+    if may_begin {
+        add(items, &mut current, 0, here);
+    }
     let mut hit = None;
     for (i, start) in current {
         match items[i] {
@@ -1193,6 +1178,14 @@ mod tests {
             .unwrap()
             .found_in(&seq));
         assert!(PatternSearch::new(vec![PatItem::Gap]).is_none());
+        // Anchored at the first item (Modbus frames): "1 * 3" begins at 1 2 3 ...; "2 3" does not
+        // begin there, although it is inside; a later possible start does not hide the first one.
+        let anchored = |items: Vec<PatItem>, seq: &[Annotation]| matches_from_start(&items, seq);
+        assert!(anchored(vec![e(1), PatItem::Gap, e(3)], &seq));
+        assert!(!anchored(vec![e(2), e(3)], &seq));
+        let twice: Vec<Annotation> = [1, 3, 1, 3].iter().map(|&v| ann(v)).collect();
+        assert!(anchored(vec![e(1), PatItem::Gap, e(3), e(1)], &twice));
+        assert!(anchored(vec![], &seq), "nothing to match: any frame");
     }
 
     #[test]
