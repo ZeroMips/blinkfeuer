@@ -490,6 +490,21 @@ impl App {
         self.session.as_ref().is_some_and(|s| s.is_running())
     }
 
+    /// The default channel setup for `n` channels of the selected device and source: the generator's
+    /// signal names and buses, else CH0, CH1, ... The decoders keep their settings. Until the setup
+    /// is changed again it follows the device and source.
+    fn reset_layout(&mut self, n: usize) {
+        self.layout = match (self.pattern, self.device) {
+            (Pattern::Generator, DeviceChoice::Litex) => Layout::litex_generator(n),
+            (Pattern::Generator, _) => Layout::generator(n),
+            _ => Layout::new(n),
+        };
+        self.layout_touched = false;
+        self.selected = None;
+        let ids: Vec<u32> = self.decoders.iter().map(|e| e.handle.id.0).collect();
+        self.layout.place_missing_decoders(&ids);
+    }
+
     fn start(&mut self) {
         self.error = None;
         let Some(channels) = ChannelCount::new(self.channels_n) else {
@@ -497,15 +512,7 @@ impl App {
         };
         let n = self.channels_n as usize;
         if !self.layout_touched || self.layout.names.len() != n {
-            self.layout = match (self.pattern, self.device) {
-                (Pattern::Generator, DeviceChoice::Litex) => Layout::litex_generator(n),
-                (Pattern::Generator, _) => Layout::generator(n),
-                _ => Layout::new(n),
-            };
-            self.layout_touched = false;
-            self.selected = None;
-            let ids: Vec<u32> = self.decoders.iter().map(|e| e.handle.id.0).collect();
-            self.layout.place_missing_decoders(&ids);
+            self.reset_layout(n);
         }
 
         // With a trigger the capture length is decided here (pre + post around the trigger), the
@@ -636,6 +643,15 @@ impl App {
                 }
                 if ui.button("Protocol decoders...").clicked() {
                     self.show_decoders = true;
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui
+                    .button("Reset channel setup")
+                    .on_hover_text("Default names, colors, buses and groups for the selected device and source (the signal names of the simulator's generator, else CH0, CH1, ...). Decoders stay. Save the setup first to keep the current one.")
+                    .clicked()
+                {
+                    self.reset_layout(self.layout.names.len());
                     ui.close_menu();
                 }
             });
