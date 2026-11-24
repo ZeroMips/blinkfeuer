@@ -74,7 +74,7 @@ impl Spi {
     fn cs_active(&self, state: u32) -> bool {
         self.cfg
             .cs
-            .map_or(true, |c| bit(state, c) != self.cfg.cs_active_low)
+            .is_none_or(|c| bit(state, c) != self.cfg.cs_active_low)
     }
 
     fn emit_word(&mut self, flags: u8, out: &mut Vec<Annotation>) {
@@ -204,8 +204,8 @@ impl Decoder for Spi {
                 self.first_t = t;
             }
             let (mi, mo) = (
-                self.cfg.mosi.map_or(false, |c| bit(state, c)),
-                self.cfg.miso.map_or(false, |c| bit(state, c)),
+                self.cfg.mosi.is_some_and(|c| bit(state, c)),
+                self.cfg.miso.is_some_and(|c| bit(state, c)),
             );
             if self.cfg.msb_first {
                 self.mosi = (self.mosi << 1) | mi as u32;

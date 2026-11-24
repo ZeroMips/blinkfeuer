@@ -1,4 +1,4 @@
-//! Capture session: a thread that reads a [`Stream`], unpacks the wire bytes and appends them to the
+//! Capture session: a thread that reads a [`Stream`](crate::Stream), unpacks the wire bytes and appends them to the
 //! shared capture store.
 
 use crate::{CaptureConfig, Device, DeviceError, ReadResult, StreamReport};

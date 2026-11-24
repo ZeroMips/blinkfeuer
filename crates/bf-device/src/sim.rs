@@ -47,7 +47,7 @@ impl Default for Generator {
 impl Generator {
     pub fn new() -> Self {
         let mut t: Vec<(bool, bool)> = Vec::new();
-        let mut push = |scl, sda, n| t.extend(std::iter::repeat((scl, sda)).take(n));
+        let mut push = |scl, sda, n| t.extend(std::iter::repeat_n((scl, sda), n));
         push(true, true, 4); // idle
         push(true, false, 2); // START: SDA falls while SCL is high
         for &byte in &I2C_BYTES {
@@ -329,7 +329,7 @@ mod tests {
         let slot = |s: u64| (s as f64 * 1e9 / UART_BAUD) as u64 + 100;
         for k in 0..8u64 {
             assert_eq!(
-                u32::from(g.at_ns(slot(1 + k)) >> ch::UART & 1),
+                (g.at_ns(slot(1 + k)) >> ch::UART & 1),
                 u32::from((UART_MESSAGE[0] >> k) & 1),
                 "data bit {k}"
             );

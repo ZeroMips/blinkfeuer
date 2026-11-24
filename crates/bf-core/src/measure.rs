@@ -175,11 +175,7 @@ mod tests {
 
     fn square(high: usize, low: usize, periods: usize) -> Vec<u32> {
         (0..periods)
-            .flat_map(|_| {
-                std::iter::repeat(1u32)
-                    .take(high)
-                    .chain(std::iter::repeat(0u32).take(low))
-            })
+            .flat_map(|_| std::iter::repeat_n(1u32, high).chain(std::iter::repeat_n(0u32, low)))
             .collect()
     }
 

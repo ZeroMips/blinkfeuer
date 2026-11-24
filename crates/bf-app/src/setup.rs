@@ -213,7 +213,7 @@ pub fn parse_hex_pattern(text: &str) -> Result<Vec<PatItem>, String> {
             .or_else(|| token.strip_prefix("0X"))
             .unwrap_or(token);
         let digits: Vec<char> = t.chars().collect();
-        if digits.len() % 2 != 0 {
+        if !digits.len().is_multiple_of(2) {
             return Err("hex bytes come in pairs of digits (48 65 6C)".into());
         }
         for pair in digits.chunks(2) {
@@ -1376,8 +1376,10 @@ mod tests {
             );
         }
         // New setups write no old fields, and keep their patterns.
-        let mut p = ProtocolSetup::default();
-        p.i2c_pattern = "S @50W".into();
+        let p = ProtocolSetup {
+            i2c_pattern: "S @50W".into(),
+            ..Default::default()
+        };
         let json = serde_json::to_value(&p).unwrap();
         assert!(json.get("i2c_what").is_none() && json.get("spi_value").is_none());
         assert_eq!(load(json).i2c_pattern, "S @50W");

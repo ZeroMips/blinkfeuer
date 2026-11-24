@@ -1406,7 +1406,7 @@ impl App {
         }
     }
 
-    /// "UART Telegram: <text>" for the selected decoded item.
+    /// `UART Telegram: <text>` for the selected decoded item.
     fn selected_text(&self) -> Option<String> {
         let sel = self.selected_ann?;
         let e = self.entry(sel.id)?;

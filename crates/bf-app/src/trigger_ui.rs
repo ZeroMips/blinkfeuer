@@ -332,18 +332,18 @@ fn pattern(ui: &mut egui::Ui, t: &mut TriggerSetup, names: &[String], n: usize) 
         .num_columns(3)
         .spacing([10.0, 3.0])
         .show(ui, |ui| {
-            for ch in 0..n.min(32) {
+            for (ch, cond) in t.conds.iter_mut().enumerate().take(n.min(32)) {
                 ui.label(format!("{ch:>2}"));
                 ui.label(names.get(ch).cloned().unwrap_or_default());
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for c in Cond::ALL {
                         if ui
-                            .selectable_label(t.conds[ch] == c, c.label())
+                            .selectable_label(*cond == c, c.label())
                             .on_hover_text(c.describe())
                             .clicked()
                         {
-                            t.conds[ch] = c;
+                            *cond = c;
                         }
                     }
                 });

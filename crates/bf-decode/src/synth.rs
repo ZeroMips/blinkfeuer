@@ -91,11 +91,11 @@ impl Wave {
                     (p, p + 2 * half)
                 };
                 if let Some(c) = cfg.mosi {
-                    let v = mosi.get(w).map_or(false, |m| (m >> shift) & 1 != 0);
+                    let v = mosi.get(w).is_some_and(|m| (m >> shift) & 1 != 0);
                     self.set(c, d0, d1, v);
                 }
                 if let Some(c) = cfg.miso {
-                    let v = miso.get(w).map_or(false, |m| (m >> shift) & 1 != 0);
+                    let v = miso.get(w).is_some_and(|m| (m >> shift) & 1 != 0);
                     self.set(c, d0, d1, v);
                 }
                 // Clock: leading edge in the middle of the bit period, trailing edge half a period later.

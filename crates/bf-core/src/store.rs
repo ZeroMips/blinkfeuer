@@ -165,7 +165,7 @@ impl CaptureStore {
             "block_samples must be a power of two"
         );
         assert!(
-            cfg.chunk_samples % cfg.block_samples == 0,
+            cfg.chunk_samples.is_multiple_of(cfg.block_samples),
             "chunk_samples must be a multiple of the block size"
         );
         Self {
@@ -291,7 +291,7 @@ impl CaptureStore {
         while !s.is_empty() {
             let c = &mut self.open;
             let off = c.len;
-            if off % block == 0 {
+            if off.is_multiple_of(block) {
                 c.blocks.push(Block {
                     ev_idx: c.events.len() as u32,
                     start_state: c.last_state,
@@ -321,7 +321,7 @@ impl CaptureStore {
             c.last_state = last;
             c.len += n as u32;
             s = &s[n..];
-            if c.len % block == 0
+            if c.len.is_multiple_of(block)
                 && (c.len >= chunk_samples || c.events.len() as u32 >= chunk_max_events)
             {
                 self.seal();
@@ -603,7 +603,7 @@ mod tests {
     fn samples() -> impl Strategy<Value = Vec<u32>> {
         prop::collection::vec((0u32..256, 1usize..40), 1..60).prop_map(|runs| {
             runs.into_iter()
-                .flat_map(|(v, n)| std::iter::repeat(v).take(n))
+                .flat_map(|(v, n)| std::iter::repeat_n(v, n))
                 .collect()
         })
     }
@@ -695,7 +695,7 @@ mod tests {
         assert!(!cols[0].valid);
         assert!(cols[1].valid);
         assert_eq!(cols[1].edges, 1); // samples 0..8: toggle at 4
-        assert_eq!(cols[9].valid, false); // 64..72 is past the end
+        assert!(!cols[9].valid); // 64..72 is past the end
         assert_eq!(cols.len(), 10);
     }
 

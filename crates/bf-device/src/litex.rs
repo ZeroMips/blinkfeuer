@@ -102,7 +102,7 @@ pub trait Bus {
     }
 }
 
-/// One EP0 transfer of at most [`MAX_WORDS`] words.
+/// One EP0 transfer of at most `MAX_WORDS` words.
 pub trait Ep0 {
     fn read(&mut self, value: u16, index: u16, len: usize) -> Result<Vec<u8>, DeviceError>;
     fn write(&mut self, value: u16, index: u16, data: &[u8]) -> Result<(), DeviceError>;
@@ -128,8 +128,8 @@ impl<T: Ep0> Bus for Ep0Bus<T> {
                     4 * chunk.len()
                 )));
             }
-            for (w, b) in chunk.iter_mut().zip(data.chunks_exact(4)) {
-                *w = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            for (w, b) in chunk.iter_mut().zip(data.as_chunks::<4>().0) {
+                *w = u32::from_le_bytes(*b);
             }
             addr += 4 * chunk.len() as u32;
         }
@@ -255,7 +255,7 @@ fn divider_ok(info: &Info, channels: u8, divider: u64) -> bool {
 /// Highest sample rate for `channels` channels (Hz), 0 if none.
 pub fn max_samplerate(info: &Info, channels: u8) -> u64 {
     (1..=info.ratio as u64 * 4)
-        .find(|&d| divider_ok(info, channels, d) && info.base_rate as u64 % d == 0)
+        .find(|&d| divider_ok(info, channels, d) && (info.base_rate as u64).is_multiple_of(d))
         .map_or(0, |d| info.base_rate as u64 / d)
 }
 
@@ -270,7 +270,7 @@ pub fn samplerates(info: &Info, channels: u8) -> Vec<f64> {
     while decade <= base {
         for s in STEPS {
             let r = decade * s;
-            if r <= max && base % r == 0 && r <= base {
+            if r <= max && base.is_multiple_of(r) && r <= base {
                 rates.push(r);
             }
         }
@@ -278,7 +278,7 @@ pub fn samplerates(info: &Info, channels: u8) -> Vec<f64> {
     }
     for d in 1..=8u64 {
         let r = base / d;
-        if base % d == 0 && r <= max {
+        if base.is_multiple_of(d) && r <= max {
             rates.push(r);
         }
     }
@@ -310,7 +310,7 @@ pub fn capabilities(info: &Info) -> Capabilities {
 pub fn divider_for(info: &Info, cfg: &CaptureConfig) -> Result<u32, DeviceError> {
     let rate = cfg.sample_rate.round() as u64;
     let base = info.base_rate as u64;
-    if rate == 0 || base % rate != 0 {
+    if rate == 0 || !base.is_multiple_of(rate) {
         return Err(DeviceError::Config(format!(
             "a sample rate of {rate} Hz is not {} MHz / N",
             base as f64 / 1e6
@@ -885,7 +885,10 @@ mod tests {
         // Continuous: limit 0. Test pattern codes of the other modes.
         let mut f = Fake::gateware();
         configure(&mut f, &i, &cfg(4, 800e6, Pattern::Generator, None)).unwrap();
-        assert_eq!(f.writes[0], (reg::ANALYZER_CONTROL, 0 << 4 | 2 << 8));
+        // The register fields spelled out: 0 at bit 4, 2 at bit 8.
+        #[allow(clippy::identity_op)]
+        let control = 0 << 4 | 2 << 8;
+        assert_eq!(f.writes[0], (reg::ANALYZER_CONTROL, control));
         assert_eq!(
             &f.writes[2..],
             &[(reg::ANALYZER_LIMIT, 0), (reg::ANALYZER_LIMIT + 4, 0)]

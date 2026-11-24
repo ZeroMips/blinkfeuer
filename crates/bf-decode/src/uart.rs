@@ -300,7 +300,7 @@ impl Uart {
                     let mut flags = f.flags;
                     let ok = match self.cfg.parity {
                         Parity::None => true,
-                        Parity::Even => (f.ones + f.parity_bit as u32) % 2 == 0,
+                        Parity::Even => (f.ones + f.parity_bit as u32).is_multiple_of(2),
                         Parity::Odd => (f.ones + f.parity_bit as u32) % 2 == 1,
                         Parity::Mark => f.parity_bit,
                         Parity::Space => !f.parity_bit,

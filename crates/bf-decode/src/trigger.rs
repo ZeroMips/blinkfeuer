@@ -71,7 +71,7 @@ impl PatItem {
             } => {
                 a.kind == Kind::Address
                     && fits(value, care)
-                    && read.map_or(true, |r| r == (a.flags & flag::READ != 0))
+                    && read.is_none_or(|r| r == (a.flags & flag::READ != 0))
                     && (!want_nak || nak)
             }
             PatItem::Start { repeated } => {
@@ -107,7 +107,7 @@ impl PatItem {
 pub fn normalize(items: Vec<PatItem>) -> Vec<PatItem> {
     let mut out: Vec<PatItem> = Vec::new();
     for it in items {
-        if it == PatItem::Gap && out.last().map_or(true, |l| *l == PatItem::Gap) {
+        if it == PatItem::Gap && out.last().is_none_or(|l| *l == PatItem::Gap) {
             continue;
         }
         out.push(it);

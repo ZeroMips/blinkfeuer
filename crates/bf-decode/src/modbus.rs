@@ -179,7 +179,7 @@ pub fn parse(frame: &[u8]) -> (u8, Vec<Field>) {
             RESPONSE
         }
         // Read coils, discrete inputs, holding registers, input registers.
-        1..=4 if n >= 3 && body[2] as usize == n - 3 && (fc <= 2 || (n - 3) % 2 == 0) => {
+        1..=4 if n >= 3 && body[2] as usize == n - 3 && (fc <= 2 || (n - 3).is_multiple_of(2)) => {
             add(Kind::ModbusByteCount, 2..3, body[2] as u32);
             data(&mut add, 3, fc >= 3);
             RESPONSE

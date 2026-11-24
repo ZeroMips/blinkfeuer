@@ -389,7 +389,7 @@ fn uart_trigger(
             let other = [0x2E, 0x20, 0x55, 0x00]
                 .into_iter()
                 .map(|b: u8| b & mask)
-                .find(|&b| items.first().map_or(true, |i| !fits(b, i)))
+                .find(|&b| items.first().is_none_or(|i| !fits(b, i)))
                 .unwrap_or(0);
             let mut chars = vec![other];
             for it in items {

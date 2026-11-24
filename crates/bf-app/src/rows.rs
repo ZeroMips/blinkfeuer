@@ -638,12 +638,11 @@ impl Layout {
     pub fn move_to(&mut self, m: Mover, dest: Dest) -> bool {
         match dest {
             Dest::Top(i) if i > self.items.len() => return false,
-            Dest::Group { item, .. } => {
-                if !matches!(self.items.get(item), Some(Item::Group(_)))
-                    || matches!(m, Mover::Group(_))
-                {
-                    return false;
-                }
+            Dest::Group { item, .. }
+                if (!matches!(self.items.get(item), Some(Item::Group(_)))
+                    || matches!(m, Mover::Group(_))) =>
+            {
+                return false;
             }
             _ => {}
         }
@@ -964,7 +963,7 @@ impl Layout {
     }
 }
 
-/// "[15:8]" for consecutive members, "[5 bits]" otherwise.
+/// `[15:8]` for consecutive members, `[5 bits]` otherwise.
 pub fn bus_range(members: &[u8]) -> String {
     let desc = members.windows(2).all(|w| w[0] == w[1] + 1);
     let asc = members.windows(2).all(|w| w[1] == w[0] + 1);

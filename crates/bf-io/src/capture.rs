@@ -300,7 +300,7 @@ mod tests {
         (0..n)
             .map(|_| {
                 x = x.wrapping_mul(1664525).wrapping_add(1013904223);
-                if (x >> 8) % quiet == 0 {
+                if (x >> 8).is_multiple_of(quiet) {
                     v ^= 1 << ((x >> 20) % 16);
                 }
                 v

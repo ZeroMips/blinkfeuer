@@ -351,7 +351,7 @@ pub fn config_ui_with(
     cfg: &mut Config,
     names: &[String],
     display: Option<Format>,
-    mut probe: Option<&mut BaudProbe>,
+    probe: Option<&mut BaudProbe>,
 ) -> bool {
     let mut changed = false;
     match cfg {
@@ -363,7 +363,7 @@ pub fn config_ui_with(
                     });
                 });
             });
-            if let Some(probe) = probe.as_deref_mut() {
+            if let Some(probe) = probe {
                 section(ui, "Detect", |ui| {
                     grid(ui, &format!("{id}g5"), |ui| {
                         changed |= param(ui, "Baud rate", help::UART_DETECT, |ui| {
@@ -1708,9 +1708,10 @@ mod tests {
 
     #[test]
     fn search_matches_modbus_frames_from_their_first_byte() {
-        let mut uart = UartConfig::default();
-        uart.protocol = Protocol::ModbusRtu;
-        let modbus = Config::Uart(uart);
+        let modbus = Config::Uart(UartConfig {
+            protocol: Protocol::ModbusRtu,
+            ..Default::default()
+        });
         let chars = text_lane(&[0x65, 0x06, 0x01, 0x01, 0x11, 0x03, 0x65, 0x06]);
         let frame = |start: u64, end: u64, value: u32| Annotation {
             start,

@@ -142,7 +142,7 @@ pub fn pack(channels: ChannelCount, samples: &[u32], out: &mut Vec<u8>) {
         "unaligned sample count"
     );
     match channels.get() {
-        2 => out.extend(samples.chunks_exact(4).map(|s| {
+        2 => out.extend(samples.as_chunks::<4>().0.iter().map(|s| {
             (s[0] & 3) as u8
                 | ((s[1] & 3) as u8) << 2
                 | ((s[2] & 3) as u8) << 4
@@ -150,7 +150,9 @@ pub fn pack(channels: ChannelCount, samples: &[u32], out: &mut Vec<u8>) {
         })),
         4 => out.extend(
             samples
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|s| (s[0] & 0xf) as u8 | ((s[1] & 0xf) as u8) << 4),
         ),
         8 => out.extend(samples.iter().map(|&s| s as u8)),

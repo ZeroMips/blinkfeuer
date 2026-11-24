@@ -128,9 +128,7 @@ impl Trigger {
     /// Index of the first sample of `words` that satisfies the trigger; `prev` is the sample before
     /// `words[0]`.
     pub fn find(&self, prev: u32, words: &[u32]) -> Option<usize> {
-        let Some(&first) = words.first() else {
-            return None;
-        };
+        let &first = words.first()?;
         if self.matches(prev, first) {
             return Some(0);
         }
