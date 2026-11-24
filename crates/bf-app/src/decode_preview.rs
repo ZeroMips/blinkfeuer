@@ -14,7 +14,9 @@ use bf_decode::engine::decode_all;
 use bf_decode::i2c::I2c;
 use bf_decode::spi::Spi;
 use bf_decode::synth::Wave;
-use bf_decode::trigger::{I2cMatch, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch};
+use bf_decode::trigger::{
+    I2cMatch, PatItem, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch,
+};
 use bf_decode::uart::{Uart, UartConfig};
 use bf_decode::{Annotation, Decoder, Format};
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke};
@@ -377,17 +379,29 @@ fn uart_trigger(
     };
     let mask = ((1u32 << cfg.data_bits.min(8)) - 1) as u8;
     // A character the trigger does not look for, then what it looks for.
+    let fits = |c: u8, item: &PatItem| match *item {
+        PatItem::Char { value, care } => (c as u16 ^ value) & care & 0xFF == 0,
+        PatItem::Gap => true,
+    };
     let (chars, broken): (Vec<u8>, bool) = match m {
-        UartMatch::Bytes(seq) => {
-            let other = [0x2E, 0x20, 0x55]
+        UartMatch::Pattern { items, .. } => {
+            let other = [0x2E, 0x20, 0x55, 0x00]
                 .into_iter()
                 .map(|b: u8| b & mask)
-                .find(|b| Some(b) != seq.first())
+                .find(|&b| items.first().map_or(true, |i| !fits(b, i)))
                 .unwrap_or(0);
-            (
-                std::iter::once(other).chain(seq.iter().copied()).collect(),
-                false,
-            )
+            let mut chars = vec![other];
+            for it in items {
+                match *it {
+                    // Free bits get a 0101 pattern, so the example shows that they do not matter.
+                    PatItem::Char { value, care } => {
+                        chars.push(((value & care | 0x55 & !care) as u8) & mask)
+                    }
+                    // Anything in between: two characters.
+                    PatItem::Gap => chars.extend([0x2E & mask, 0x2E & mask]),
+                }
+            }
+            (chars, false)
         }
         UartMatch::Error => (vec![0x4B & mask, 0x4B & mask], true),
     };
@@ -417,19 +431,22 @@ fn uart_trigger(
     }
     let lanes = decode(&w, Box::new(Uart::new(cfg.clone())));
     let what = match m {
-        UartMatch::Bytes(seq) => format!(
-            "the {} character{} {}",
-            seq.len(),
-            if seq.len() == 1 { "" } else { "s" },
-            seq.iter()
-                .map(|&b| char_label(b))
-                .collect::<Vec<_>>()
-                .join(" ")
+        UartMatch::Pattern { items, or_error } => format!(
+            "{}{}",
+            crate::setup::format_hex_pattern(items),
+            if *or_error {
+                " (or a character with an error)"
+            } else {
+                ""
+            }
         ),
         UartMatch::Error => "a framing error (here: a stop bit that is low)".into(),
     };
     let caption = vec![
-        format!("The trigger looks for {what}; the character before it does not match."),
+        format!(
+            "The trigger looks for {what}; the character before it does not match. Free bits are \
+             shown as 0101, anything in between as '.'."
+        ),
         format!(
             "T marks the trigger sample: the {} of the match.",
             at_text(at)
@@ -777,7 +794,7 @@ mod tests {
 
     #[test]
     fn trigger_example_marks_the_start_or_end_of_the_sequence() {
-        let t = ProtocolTrigger::Uart(uart_cfg(), UartMatch::Bytes(b"OK".to_vec()));
+        let t = ProtocolTrigger::Uart(uart_cfg(), UartMatch::bytes(b"OK"));
         for at in [TriggerAt::Start, TriggerAt::End] {
             let p = build_trigger(&t, at, &[]).unwrap();
             // One other character, then "OK", decoded without errors.
@@ -789,6 +806,17 @@ mod tests {
             };
             assert_eq!(p.trigger, Some(want as f64), "{at:?}");
         }
+    }
+
+    #[test]
+    fn trigger_example_for_a_pattern_fires_where_the_pattern_ends() {
+        let items = crate::setup::parse_hex_pattern("4X * 0A").unwrap();
+        let t = ProtocolTrigger::Uart(uart_cfg(), UartMatch::pattern(items, true));
+        let p = build_trigger(&t, TriggerAt::End, &[]).unwrap();
+        // Other character, 0x45 (4X with the free nibble 0101), two in between, 0x0A.
+        assert_eq!(words(&p, 0), vec![0x2E, 0x45, 0x2E, 0x2E, 0x0A]);
+        assert_eq!(p.trigger, Some(p.lanes[0].1[4].end as f64));
+        assert!(p.caption[0].contains("4X * 0A") && p.caption[0].contains("error"));
     }
 
     #[test]

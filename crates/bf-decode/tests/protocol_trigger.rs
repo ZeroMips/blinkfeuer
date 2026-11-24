@@ -82,7 +82,7 @@ fn uart_text_triggers_at_the_end_of_its_last_character() {
         .expect("in the reference decode");
     assert!(UART_MESSAGE.windows(needle.len()).any(|w| w == needle));
     let store = capture(
-        ProtocolTrigger::Uart(cfg, UartMatch::Bytes(needle.to_vec())),
+        ProtocolTrigger::Uart(cfg, UartMatch::bytes(needle)),
         TriggerAt::End,
         pre,
         post,
@@ -198,7 +198,7 @@ fn the_start_of_the_match_can_be_the_trigger_instead_of_its_end() {
         .find(|s| *s >= pre)
         .expect("in the reference decode");
     let store = capture(
-        ProtocolTrigger::Uart(cfg, UartMatch::Bytes(needle.to_vec())),
+        ProtocolTrigger::Uart(cfg, UartMatch::bytes(needle)),
         TriggerAt::Start,
         pre,
         post,

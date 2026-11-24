@@ -6,7 +6,9 @@ use crate::rows::Layout;
 use bf_core::Cond;
 use bf_decode::i2c::I2cConfig;
 use bf_decode::spi::SpiConfig;
-use bf_decode::trigger::{I2cMatch, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch};
+use bf_decode::trigger::{
+    I2cMatch, PatItem, ProtocolTrigger, SpiLane, SpiMatch, TriggerAt, UartMatch,
+};
 use bf_decode::uart::UartConfig;
 use bf_decode::Format;
 use serde::{Deserialize, Serialize};
@@ -110,9 +112,12 @@ pub struct ProtocolSetup {
     /// Take the UART settings from this decoder.
     pub uart_source: Option<u32>,
     pub uart_what: UartWhat,
-    /// Bytes to look for, as hex ("48 65 6C") or, with `uart_ascii`, as text with `\r \n \xNN` escapes.
+    /// What to look for: hex ("48 65 6C", with X for free nibbles, 0b... for single bits and * for
+    /// anything in between) or, with `uart_ascii`, text with `\r \n \xNN \xXX \*` escapes.
     pub uart_bytes: String,
     pub uart_ascii: bool,
+    /// Also fire on any character with a framing or parity error or a break.
+    pub uart_or_error: bool,
     pub spi: SpiConfig,
     pub spi_source: Option<u32>,
     pub spi_miso: bool,
@@ -140,6 +145,7 @@ impl Default for ProtocolSetup {
             uart_what: UartWhat::Bytes,
             uart_bytes: "sim 0".into(),
             uart_ascii: true,
+            uart_or_error: false,
             spi: SpiConfig {
                 cs: Some(1),
                 sck: 2,
@@ -161,27 +167,82 @@ impl Default for ProtocolSetup {
     }
 }
 
-/// "48 65 6c", "0x48,0x65", "4865" -> bytes.
-pub fn parse_hex_bytes(text: &str) -> Result<Vec<u8>, String> {
-    let cleaned: String = text
-        .replace("0x", "")
-        .replace("0X", "")
-        .chars()
-        .filter(|c| !c.is_whitespace() && *c != ',')
-        .collect();
-    if cleaned.len() % 2 != 0 {
-        return Err("hex bytes come in pairs of digits (48 65 6C)".into());
+/// One hex digit, or `X` for a free nibble: (value, care).
+fn nibble(c: char) -> Option<(u16, u16)> {
+    match c {
+        'X' | 'x' => Some((0, 0)),
+        _ => c.to_digit(16).map(|v| (v as u16, 0xF)),
     }
-    (0..cleaned.len() / 2)
-        .map(|i| {
-            u8::from_str_radix(&cleaned[2 * i..2 * i + 2], 16)
-                .map_err(|_| format!("'{}' is not hex", &cleaned[2 * i..2 * i + 2]))
-        })
-        .collect()
 }
 
-/// Text with the escapes `\r \n \t \0 \\` and `\xNN` -> bytes.
-pub fn parse_ascii_bytes(text: &str) -> Result<Vec<u8>, String> {
+/// A hex UART pattern: bytes as pairs of hex digits ("48 65 6C", "0x48,0x65", "4865") with `X` for a
+/// free nibble ("4X", "XX"), `0b...` for single bits with `X` for free ones ("0b1010XXXX"), and `*`
+/// for any number of characters in between.
+pub fn parse_hex_pattern(text: &str) -> Result<Vec<PatItem>, String> {
+    let mut out = Vec::new();
+    for token in text
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|t| !t.is_empty())
+    {
+        if token == "*" {
+            out.push(PatItem::Gap);
+            continue;
+        }
+        if let Some(b) = token
+            .strip_prefix("0b")
+            .or_else(|| token.strip_prefix("0B"))
+        {
+            if b.is_empty() || b.len() > 9 {
+                return Err(format!("{token}: 1 to 9 bits after 0b"));
+            }
+            let (mut value, mut care) = (0u16, 0u16);
+            for c in b.chars() {
+                let (v, k) = match c {
+                    '0' => (0, 1),
+                    '1' => (1, 1),
+                    'X' | 'x' => (0, 0),
+                    _ => return Err(format!("{token}: bits are 0, 1 or X")),
+                };
+                value = value << 1 | v;
+                care = care << 1 | k;
+            }
+            out.push(PatItem::Char { value, care });
+            continue;
+        }
+        let t = token
+            .strip_prefix("0x")
+            .or_else(|| token.strip_prefix("0X"))
+            .unwrap_or(token);
+        let digits: Vec<char> = t.chars().collect();
+        if digits.len() % 2 != 0 {
+            return Err("hex bytes come in pairs of digits (48 65 6C)".into());
+        }
+        for pair in digits.chunks(2) {
+            match (nibble(pair[0]), nibble(pair[1])) {
+                (Some((hv, hc)), Some((lv, lc))) => {
+                    let care = hc << 4 | lc;
+                    // An exact byte also fixes a 9th data bit to 0, like a plain byte always did.
+                    let care = if care == 0xFF { 0x1FF } else { care };
+                    out.push(PatItem::Char {
+                        value: hv << 4 | lv,
+                        care,
+                    });
+                }
+                _ => {
+                    return Err(format!(
+                        "'{}{}' is not hex (X: any nibble)",
+                        pair[0], pair[1]
+                    ))
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A text UART pattern: characters, the escapes `\r \n \t \0 \\` and `\xNN` (with `X` for a free
+/// nibble: `\xXX` is any character), and `\*` for any number of characters in between.
+pub fn parse_text_pattern(text: &str) -> Result<Vec<PatItem>, String> {
     let mut out = Vec::new();
     let mut it = text.chars().peekable();
     while let Some(c) = it.next() {
@@ -189,26 +250,105 @@ pub fn parse_ascii_bytes(text: &str) -> Result<Vec<u8>, String> {
             if !c.is_ascii() {
                 return Err(format!("'{c}' is not an ASCII character"));
             }
-            out.push(c as u8);
+            out.push(PatItem::exact(c as u8));
             continue;
         }
         match it.next() {
-            Some('r') => out.push(b'\r'),
-            Some('n') => out.push(b'\n'),
-            Some('t') => out.push(b'\t'),
-            Some('0') => out.push(0),
-            Some('\\') => out.push(b'\\'),
+            Some('r') => out.push(PatItem::exact(b'\r')),
+            Some('n') => out.push(PatItem::exact(b'\n')),
+            Some('t') => out.push(PatItem::exact(b'\t')),
+            Some('0') => out.push(PatItem::exact(0)),
+            Some('\\') => out.push(PatItem::exact(b'\\')),
+            Some('*') => out.push(PatItem::Gap),
             Some('x') => {
                 let hex: String = it.by_ref().take(2).collect();
-                out.push(
-                    u8::from_str_radix(&hex, 16).map_err(|_| format!("\\x{hex} is not a byte"))?,
-                );
+                let mut cs = hex.chars();
+                match (cs.next().and_then(nibble), cs.next().and_then(nibble)) {
+                    (Some((hv, hc)), Some((lv, lc))) => {
+                        let care = hc << 4 | lc;
+                        out.push(PatItem::Char {
+                            value: hv << 4 | lv,
+                            care: if care == 0xFF { 0x1FF } else { care },
+                        });
+                    }
+                    _ => return Err(format!("\\x{hex} is not a byte (X: any nibble)")),
+                }
             }
             Some(other) => return Err(format!("unknown escape \\{other}")),
             None => return Err("a backslash at the end".into()),
         }
     }
     Ok(out)
+}
+
+/// A pattern in the hex notation of [`parse_hex_pattern`].
+pub fn format_hex_pattern(items: &[PatItem]) -> String {
+    items
+        .iter()
+        .map(|it| match *it {
+            PatItem::Gap => "*".to_string(),
+            PatItem::Char { value, care } => {
+                let (care8, nine) = (
+                    care & 0xFF,
+                    value & care & 0x100 != 0 || care & 0x100 != 0 && care & 0xFF != 0xFF,
+                );
+                let nib = |shift: u16| {
+                    if care8 >> shift & 0xF == 0xF {
+                        format!("{:X}", value >> shift & 0xF)
+                    } else {
+                        "X".into()
+                    }
+                };
+                let nibble_aligned = [0, 4].iter().all(|s| matches!(care8 >> s & 0xF, 0 | 0xF));
+                if nibble_aligned && !nine {
+                    format!("{}{}", nib(4), nib(0))
+                } else {
+                    let width = if nine { 9 } else { 8 };
+                    let bits: String = (0..width)
+                        .rev()
+                        .map(|i| match (care >> i & 1, value >> i & 1) {
+                            (0, _) => 'X',
+                            (_, 1) => '1',
+                            _ => '0',
+                        })
+                        .collect();
+                    format!("0b{bits}")
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A pattern in the text notation of [`parse_text_pattern`]; `None` if it has single-bit wildcards,
+/// which only the hex notation can write.
+pub fn format_text_pattern(items: &[PatItem]) -> Option<String> {
+    let mut s = String::new();
+    for it in items {
+        match *it {
+            PatItem::Gap => s.push_str("\\*"),
+            PatItem::Char { value, care } => {
+                let care8 = care & 0xFF;
+                if care8 == 0xFF {
+                    let c = value as u8;
+                    match c {
+                        b'\\' => s.push_str("\\\\"),
+                        b'\r' => s.push_str("\\r"),
+                        b'\n' => s.push_str("\\n"),
+                        b'\t' => s.push_str("\\t"),
+                        0x20..=0x7E => s.push(c as char),
+                        _ => s.push_str(&format!("\\x{c:02X}")),
+                    }
+                } else if [0, 4].iter().all(|sh| matches!(care8 >> sh & 0xF, 0 | 0xF)) {
+                    s.push_str("\\x");
+                    s.push_str(&format_hex_pattern(&[*it]));
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(s)
 }
 
 pub fn parse_hex_u32(text: &str) -> Result<u32, String> {
@@ -220,11 +360,12 @@ pub fn parse_hex_u32(text: &str) -> Result<u32, String> {
 }
 
 impl ProtocolSetup {
-    pub fn uart_sequence(&self) -> Result<Vec<u8>, String> {
+    /// The typed UART pattern.
+    pub fn uart_pattern(&self) -> Result<Vec<PatItem>, String> {
         if self.uart_ascii {
-            parse_ascii_bytes(&self.uart_bytes)
+            parse_text_pattern(&self.uart_bytes)
         } else {
-            parse_hex_bytes(&self.uart_bytes)
+            parse_hex_pattern(&self.uart_bytes)
         }
     }
 
@@ -285,7 +426,7 @@ impl ProtocolSetup {
             TriggerMode::Pattern => return Ok(None),
             TriggerMode::Uart => {
                 let what = match self.uart_what {
-                    UartWhat::Bytes => UartMatch::Bytes(self.uart_sequence()?),
+                    UartWhat::Bytes => UartMatch::pattern(self.uart_pattern()?, self.uart_or_error),
                     UartWhat::Error => UartMatch::Error,
                 };
                 ProtocolTrigger::Uart(self.uart.clone(), what)
@@ -334,7 +475,11 @@ impl ProtocolSetup {
         match mode {
             TriggerMode::Pattern => String::new(),
             TriggerMode::Uart => match self.uart_what {
-                UartWhat::Bytes => format!("UART \"{}\"", self.uart_bytes),
+                UartWhat::Bytes => format!(
+                    "UART \"{}\"{}",
+                    self.uart_bytes,
+                    if self.uart_or_error { " or error" } else { "" }
+                ),
                 UartWhat::Error => "UART error".into(),
             },
             TriggerMode::Spi => format!(
@@ -739,19 +884,73 @@ mod tests {
 
     #[test]
     fn typed_trigger_values_are_parsed() {
-        assert_eq!(parse_hex_bytes("48 65 6c").unwrap(), b"Hel");
-        assert_eq!(parse_hex_bytes("0x48,0x65").unwrap(), b"He");
-        assert_eq!(parse_hex_bytes("4865").unwrap(), b"He");
-        assert!(parse_hex_bytes("486").is_err() && parse_hex_bytes("zz").is_err());
-        assert_eq!(parse_hex_bytes("").unwrap(), b"");
-        assert_eq!(parse_ascii_bytes("OK\\r\\n").unwrap(), b"OK\r\n");
-        assert_eq!(parse_ascii_bytes("a\\x41\\\\b").unwrap(), b"aA\\b");
+        let exact = |b: &[u8]| b.iter().map(|&c| PatItem::exact(c)).collect::<Vec<_>>();
+        // Plain bytes mean what they always meant.
+        assert_eq!(parse_hex_pattern("48 65 6c").unwrap(), exact(b"Hel"));
+        assert_eq!(parse_hex_pattern("0x48,0x65").unwrap(), exact(b"He"));
+        assert_eq!(parse_hex_pattern("4865").unwrap(), exact(b"He"));
+        assert!(parse_hex_pattern("486").is_err() && parse_hex_pattern("zz").is_err());
+        assert_eq!(parse_hex_pattern("").unwrap(), vec![]);
+        assert_eq!(parse_text_pattern("OK\\r\\n").unwrap(), exact(b"OK\r\n"));
+        assert_eq!(parse_text_pattern("a\\x41\\\\b").unwrap(), exact(b"aA\\b"));
         assert!(
-            parse_ascii_bytes("bad\\q").is_err()
-                && parse_ascii_bytes("x\\").is_err()
-                && parse_ascii_bytes("\\xZZ").is_err()
+            parse_text_pattern("bad\\q").is_err()
+                && parse_text_pattern("x\\").is_err()
+                && parse_text_pattern("\\xZZ").is_err()
         );
-        assert!(parse_ascii_bytes("é").is_err());
+        assert!(parse_text_pattern("é").is_err());
+        // Don't-care: X everywhere, in either case.
+        let ch = |value, care| PatItem::Char { value, care };
+        assert_eq!(
+            parse_hex_pattern("XX 4X xf 0b1010XXXX * 0x0d").unwrap(),
+            vec![
+                ch(0, 0),
+                ch(0x40, 0xF0),
+                ch(0x0F, 0x0F),
+                ch(0b1010_0000, 0b1111_0000),
+                PatItem::Gap,
+                PatItem::exact(0x0D)
+            ]
+        );
+        assert!(parse_hex_pattern("0b102").is_err() && parse_hex_pattern("0b").is_err());
+        assert_eq!(
+            parse_text_pattern("OK\\xXX\\x4X\\*\\n").unwrap(),
+            vec![
+                PatItem::exact(b'O'),
+                PatItem::exact(b'K'),
+                ch(0, 0),
+                ch(0x40, 0xF0),
+                PatItem::Gap,
+                PatItem::exact(b'\n')
+            ]
+        );
+        // ? and * are plain characters in text.
+        assert_eq!(parse_text_pattern("?*").unwrap(), exact(b"?*"));
+    }
+
+    #[test]
+    fn patterns_convert_between_text_and_hex() {
+        for hex in ["4F 4B 0D 0A", "XX 4X * 0A", "0b10X0XXXX 41"] {
+            let items = parse_hex_pattern(hex).unwrap();
+            assert_eq!(format_hex_pattern(&items), hex);
+            if let Some(text) = format_text_pattern(&items) {
+                assert_eq!(parse_text_pattern(&text).unwrap(), items, "{hex} -> {text}");
+            }
+        }
+        let ok = parse_hex_pattern("4F 4B 0D 0A").unwrap();
+        assert_eq!(format_text_pattern(&ok).unwrap(), "OK\\r\\n");
+        let wild = parse_hex_pattern("XX 4X * 5C").unwrap();
+        assert_eq!(format_text_pattern(&wild).unwrap(), "\\xXX\\x4X\\*\\\\");
+        // Bits on nibble boundaries are written as nibbles.
+        assert_eq!(
+            format_hex_pattern(&parse_hex_pattern("0b1010XXXX").unwrap()),
+            "AX"
+        );
+        // Single-bit wildcards only exist in hex.
+        assert_eq!(
+            format_text_pattern(&parse_hex_pattern("0b1X").unwrap()),
+            None
+        );
         assert_eq!(parse_hex_u32(" 0xA5 ").unwrap(), 0xA5);
         assert!(parse_hex_u32("G").is_err() && parse_hex_u32("").is_err());
     }
@@ -765,13 +964,29 @@ mod tests {
             p.build(TriggerMode::Uart).unwrap(),
             Some(ProtocolTrigger::Uart(
                 p.uart.clone(),
-                UartMatch::Bytes(b"sim 0".to_vec())
+                UartMatch::bytes(b"sim 0")
             ))
         );
         p.uart_ascii = false;
         p.uart_bytes = "4F 4B".into();
         assert!(
-            matches!(p.build(TriggerMode::Uart).unwrap(), Some(ProtocolTrigger::Uart(_, UartMatch::Bytes(b))) if b == b"OK")
+            p.build(TriggerMode::Uart).unwrap()
+                == Some(ProtocolTrigger::Uart(
+                    p.uart.clone(),
+                    UartMatch::bytes(b"OK")
+                ))
+        );
+        p.uart_or_error = true;
+        p.uart_bytes = "4F * 4B".into();
+        assert_eq!(
+            p.build(TriggerMode::Uart).unwrap(),
+            Some(ProtocolTrigger::Uart(
+                p.uart.clone(),
+                UartMatch::pattern(
+                    vec![PatItem::exact(b'O'), PatItem::Gap, PatItem::exact(b'K')],
+                    true
+                )
+            ))
         );
         p.uart_bytes.clear();
         assert!(p.build(TriggerMode::Uart).is_err());

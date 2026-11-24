@@ -11,13 +11,67 @@ use crate::{flag, Annotation, Decoder, Kind};
 use bf_core::EventTrigger;
 use serde::{Deserialize, Serialize};
 
+/// One position of a UART pattern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PatItem {
+    /// A character whose bits set in `care` equal those of `value` (all bits set: exactly `value`).
+    Char { value: u16, care: u16 },
+    /// Any number of characters, also none.
+    Gap,
+}
+
+impl PatItem {
+    pub fn exact(b: u8) -> Self {
+        PatItem::Char {
+            value: b as u16,
+            care: 0x1FF,
+        }
+    }
+
+    fn matches(&self, c: u32) -> bool {
+        match *self {
+            PatItem::Char { value, care } => (c as u16 ^ value) & care == 0,
+            PatItem::Gap => false,
+        }
+    }
+}
+
 /// What to look for on a UART.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UartMatch {
-    /// These characters, one right after the other.
-    Bytes(Vec<u8>),
+    /// Characters matching `items` one after the other (a gap item skips any number of them); with
+    /// `or_error` also any character with a framing or parity error or a break.
+    Pattern { items: Vec<PatItem>, or_error: bool },
     /// A framing error, a parity error or a break.
     Error,
+}
+
+impl UartMatch {
+    /// Exactly these characters.
+    pub fn bytes(b: &[u8]) -> Self {
+        UartMatch::Pattern {
+            items: b.iter().map(|&c| PatItem::exact(c)).collect(),
+            or_error: false,
+        }
+    }
+
+    /// A pattern with gaps at its ends removed (they change nothing) and runs of gaps joined.
+    pub fn pattern(items: Vec<PatItem>, or_error: bool) -> Self {
+        let mut out: Vec<PatItem> = Vec::new();
+        for it in items {
+            if it == PatItem::Gap && out.last().map_or(true, |l| *l == PatItem::Gap) {
+                continue;
+            }
+            out.push(it);
+        }
+        while out.last() == Some(&PatItem::Gap) {
+            out.pop();
+        }
+        UartMatch::Pattern {
+            items: out,
+            or_error,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,9 +128,19 @@ pub enum ProtocolTrigger {
 pub const MAX_SEQUENCE: usize = 16;
 
 enum Matcher {
-    UartBytes(Vec<u8>),
+    /// A pattern (never starting or ending with a gap) and its partial matches: (items matched,
+    /// sample where the match began), at most one per position.
+    UartPattern {
+        items: Vec<PatItem>,
+        or_error: bool,
+        active: Vec<(usize, u64)>,
+    },
     UartError,
-    SpiWord { lane: u8, value: u32, care: u32 },
+    SpiWord {
+        lane: u8,
+        value: u32,
+        care: u32,
+    },
     I2c(I2cMatch),
 }
 
@@ -85,8 +149,8 @@ struct DecoderTrigger {
     matcher: Matcher,
     at: TriggerAt,
     out: Vec<Annotation>,
-    /// The last characters decoded with the sample each started at (UART sequences).
-    recent: Vec<(u8, u64)>,
+    /// The last sample seen (for the lookback of partial matches).
+    now: u64,
     /// Longest item seen so far, in samples: how far back a trigger at the start of an item can reach.
     max_len: u64,
     /// How long before its detection a trigger sample can lie: `lookback_bits` bit times at `bit_rate`.
@@ -103,26 +167,30 @@ impl DecoderTrigger {
             self.max_len = self.max_len.max(a.end.saturating_sub(a.start));
             // The match begins at the first character of a sequence, at the item itself otherwise.
             let mut begins = a.start;
-            let m = match &self.matcher {
-                Matcher::UartBytes(seq) => {
+            let m = match &mut self.matcher {
+                Matcher::UartPattern {
+                    items,
+                    or_error,
+                    active,
+                } => {
                     if a.lane != 0 || a.kind != Kind::Data {
                         false
+                    } else if *or_error && a.is_error() {
+                        active.clear();
+                        true
                     } else {
-                        self.recent.push((a.value as u8, a.start));
-                        if self.recent.len() > seq.len() {
-                            self.recent.remove(0);
+                        match step_pattern(items, active, &a) {
+                            Some(start) => {
+                                begins = start;
+                                true
+                            }
+                            None => false,
                         }
-                        let hit = self.recent.len() == seq.len()
-                            && self.recent.iter().map(|c| c.0).eq(seq.iter().copied());
-                        if hit {
-                            begins = self.recent[0].1;
-                        }
-                        hit
                     }
                 }
                 Matcher::UartError => a.lane == 0 && a.kind == Kind::Data && a.is_error(),
                 Matcher::SpiWord { lane, value, care } => {
-                    a.kind == Kind::Data && a.lane == *lane && (a.value ^ value) & care == 0
+                    a.kind == Kind::Data && a.lane == *lane && (a.value ^ *value) & *care == 0
                 }
                 Matcher::I2c(m) => match (m, a.kind) {
                     (I2cMatch::Start, Kind::Start) | (I2cMatch::Stop, Kind::Stop) => true,
@@ -146,6 +214,39 @@ impl DecoderTrigger {
     }
 }
 
+/// Feed character `c` to the partial matches of `items`: the start of a completed match (the latest
+/// one, i.e. the shortest match) if `c` completes one.
+fn step_pattern(items: &[PatItem], active: &mut Vec<(usize, u64)>, c: &Annotation) -> Option<u64> {
+    // Add state `i` (and, past a gap that may match nothing, the following ones), keeping the latest
+    // start per position.
+    fn add(items: &[PatItem], next: &mut Vec<(usize, u64)>, i: usize, start: u64) {
+        match next.iter_mut().find(|s| s.0 == i) {
+            Some(s) => s.1 = s.1.max(start),
+            None => next.push((i, start)),
+        }
+        if items.get(i) == Some(&PatItem::Gap) {
+            add(items, next, i + 1, start);
+        }
+    }
+    let mut current = std::mem::take(active);
+    add(items, &mut current, 0, c.start);
+    let mut hit = None;
+    for (i, start) in current {
+        match items[i] {
+            PatItem::Gap => add(items, active, i, start),
+            ref item if item.matches(c.value) => {
+                if i + 1 == items.len() {
+                    hit = Some(hit.map_or(start, |h: u64| h.max(start)));
+                } else {
+                    add(items, active, i + 1, start);
+                }
+            }
+            _ => {}
+        }
+    }
+    hit
+}
+
 impl EventTrigger for DecoderTrigger {
     fn mask(&self) -> u32 {
         self.dec.mask()
@@ -154,17 +255,22 @@ impl EventTrigger for DecoderTrigger {
     fn reset(&mut self, sample_rate: f64) {
         self.dec.reset(sample_rate);
         self.out.clear();
-        self.recent.clear();
+        self.now = 0;
+        if let Matcher::UartPattern { active, .. } = &mut self.matcher {
+            active.clear();
+        }
         self.max_len = 0;
         self.lookback = (self.lookback_bits * sample_rate / self.bit_rate.max(1.0)) as u64;
     }
 
     fn change(&mut self, t: u64, state: u32) -> Option<u64> {
+        self.now = t;
         self.dec.change(t, state, &mut self.out);
         self.scan()
     }
 
     fn advance(&mut self, end: u64) -> Option<u64> {
+        self.now = self.now.max(end);
         self.dec.advance(end, &mut self.out);
         self.scan()
     }
@@ -172,8 +278,19 @@ impl EventTrigger for DecoderTrigger {
     fn lookback(&self) -> u64 {
         match self.at {
             TriggerAt::End => self.lookback,
-            // The trigger sample is the start of an item that is only recognised at its end.
-            TriggerAt::Start => self.lookback.max(2 * self.max_len),
+            // The trigger sample is the start of an item that is only recognised at its end, or the
+            // start of a pattern match that is still open (a gap can span any time).
+            TriggerAt::Start => {
+                let open = match &self.matcher {
+                    Matcher::UartPattern { active, .. } => active
+                        .iter()
+                        .map(|s| self.now.saturating_sub(s.1))
+                        .max()
+                        .unwrap_or(0),
+                    _ => 0,
+                };
+                self.lookback.max(2 * self.max_len).max(open)
+            }
         }
     }
 }
@@ -182,15 +299,23 @@ impl ProtocolTrigger {
     /// Problems with the settings that make the trigger useless, if any.
     pub fn check(&self) -> Result<(), String> {
         match self {
-            ProtocolTrigger::Uart(c, UartMatch::Bytes(b)) => {
-                if b.is_empty() {
-                    return Err("enter at least one byte to look for".into());
+            ProtocolTrigger::Uart(c, UartMatch::Pattern { items, .. }) => {
+                if !items.iter().any(|i| matches!(i, PatItem::Char { .. })) {
+                    return Err("enter at least one character to look for".into());
                 }
-                if b.len() > MAX_SEQUENCE {
-                    return Err(format!("at most {MAX_SEQUENCE} bytes"));
+                if items.len() > MAX_SEQUENCE {
+                    return Err(format!("at most {MAX_SEQUENCE} characters and gaps"));
                 }
-                if c.data_bits < 8 && b.iter().any(|v| *v >> c.data_bits != 0) {
-                    return Err(format!("a byte does not fit in {} data bits", c.data_bits));
+                let full = (1u16 << c.data_bits) - 1;
+                let too_wide = items.iter().any(|i| match *i {
+                    PatItem::Char { value, care } => value & care & !full != 0,
+                    PatItem::Gap => false,
+                });
+                if too_wide {
+                    return Err(format!(
+                        "a character does not fit in {} data bits",
+                        c.data_bits
+                    ));
                 }
                 Ok(())
             }
@@ -231,11 +356,23 @@ impl ProtocolTrigger {
                         }
                         + cfg.stop_bits as f64;
                     let matcher = match m {
-                        UartMatch::Bytes(b) => Matcher::UartBytes(b.clone()),
+                        UartMatch::Pattern { items, or_error } => {
+                            // Normalised: no gaps at the ends.
+                            let UartMatch::Pattern { items, .. } =
+                                UartMatch::pattern(items.clone(), *or_error)
+                            else {
+                                unreachable!()
+                            };
+                            Matcher::UartPattern {
+                                items,
+                                or_error: *or_error,
+                                active: Vec::new(),
+                            }
+                        }
                         UartMatch::Error => Matcher::UartError,
                     };
-                    let chars = if let UartMatch::Bytes(b) = m {
-                        b.len() as f64
+                    let chars = if let UartMatch::Pattern { items, .. } = m {
+                        items.len() as f64
                     } else {
                         1.0
                     };
@@ -271,7 +408,7 @@ impl ProtocolTrigger {
             matcher,
             at,
             out: Vec::new(),
-            recent: Vec::new(),
+            now: 0,
             max_len: 0,
             lookback_bits,
             bit_rate,
@@ -336,7 +473,7 @@ mod tests {
         // 100 + 120 k and its stop bit ends 100 samples later.
         let frame_end = |k: u64| 100 + 120 * k + 100;
         for chunk in [1usize, 7, 100, 4096] {
-            let t = ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"lo w".to_vec()));
+            let t = ProtocolTrigger::Uart(cfg.clone(), UartMatch::bytes(b"lo w"));
             let hit = run(&t, &words, 1e6, chunk).expect("fires");
             // "lo w" ends with the byte at index 6.
             assert!(
@@ -348,7 +485,7 @@ mod tests {
         // A sequence that is not in the data never fires; a single byte does, at its own end.
         assert_eq!(
             run(
-                &ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"xyz".to_vec())),
+                &ProtocolTrigger::Uart(cfg.clone(), UartMatch::bytes(b"xyz")),
                 &words,
                 1e6,
                 64
@@ -356,7 +493,7 @@ mod tests {
             None
         );
         let one = run(
-            &ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"h".to_vec())),
+            &ProtocolTrigger::Uart(cfg.clone(), UartMatch::bytes(b"h")),
             &words,
             1e6,
             64,
@@ -366,12 +503,150 @@ mod tests {
         // Bytes must follow each other directly: "h" then "l" is not in "hello world".
         assert_eq!(
             run(
-                &ProtocolTrigger::Uart(cfg, UartMatch::Bytes(b"hl".to_vec())),
+                &ProtocolTrigger::Uart(cfg, UartMatch::bytes(b"hl")),
                 &words,
                 1e6,
                 64
             ),
             None
+        );
+    }
+
+    /// A character whose cared-for bits are given by a pattern of '0', '1' and 'X', MSB first.
+    fn bits(p: &str) -> PatItem {
+        let (mut value, mut care) = (0u16, 0u16);
+        for c in p.chars() {
+            value <<= 1;
+            care <<= 1;
+            match c {
+                '1' => (value, care) = (value | 1, care | 1),
+                '0' => care |= 1,
+                _ => {}
+            }
+        }
+        PatItem::Char { value, care }
+    }
+
+    fn pat(items: Vec<PatItem>) -> UartMatch {
+        UartMatch::pattern(items, false)
+    }
+
+    #[test]
+    fn uart_patterns_with_wildcards_and_gaps() {
+        let (words, cfg, _) = uart_wave(b"hello world");
+        let frame_end = |k: u64| 100 + 120 * k + 100;
+        let frame_start = |k: u64| 100 + 120 * k;
+        let fire =
+            |m: UartMatch, at| run_at(&ProtocolTrigger::Uart(cfg.clone(), m), &words, 1e6, 64, at);
+        let near =
+            |hit: Option<u64>, want: u64| hit.is_some_and(|h| (h as i64 - want as i64).abs() <= 10);
+        let e = PatItem::exact;
+        // Any byte between "l" and " ": "lo " ends at index 5.
+        let any = PatItem::Char { value: 0, care: 0 };
+        assert!(near(
+            fire(pat(vec![e(b'l'), any, e(b' ')]), TriggerAt::End),
+            frame_end(5)
+        ));
+        // One nibble free: 'o' = 0x6F, 'w' = 0x77; "6X 2X 7X" finds "o w" (ends at index 6).
+        let nib = |hi: u16| PatItem::Char {
+            value: hi << 4,
+            care: 0xF0,
+        };
+        assert!(near(
+            fire(pat(vec![nib(6), nib(2), nib(7)]), TriggerAt::End),
+            frame_end(6)
+        ));
+        // Bit by bit: 'w' = 0111 0111.
+        assert!(near(
+            fire(pat(vec![bits("0111X111")]), TriggerAt::End),
+            frame_end(6)
+        ));
+        assert_eq!(
+            fire(pat(vec![bits("1XXXXXXX")]), TriggerAt::End),
+            None,
+            "no byte >= 0x80"
+        );
+        // A gap: "h" ... "d" spans the whole text; the trigger at its start is the "h".
+        let hd = pat(vec![e(b'h'), PatItem::Gap, e(b'd')]);
+        assert!(near(fire(hd.clone(), TriggerAt::End), frame_end(10)));
+        assert!(near(fire(hd, TriggerAt::Start), frame_start(0)));
+        // A gap may also match nothing: "l * l" finds the "ll" in "hello" (ends at index 3).
+        assert!(near(
+            fire(pat(vec![e(b'l'), PatItem::Gap, e(b'l')]), TriggerAt::End),
+            frame_end(3)
+        ));
+        // With several possible starts the latest one wins (the shortest match): "o * d" starts at
+        // the "o" of "world" (index 7), not of "hello".
+        assert!(near(
+            fire(pat(vec![e(b'o'), PatItem::Gap, e(b'd')]), TriggerAt::Start),
+            frame_start(7)
+        ));
+    }
+
+    #[test]
+    fn gaps_at_the_ends_are_dropped_and_runs_joined() {
+        let e = PatItem::exact;
+        let g = PatItem::Gap;
+        assert_eq!(
+            UartMatch::pattern(vec![g, e(1), g, g, e(2), g], true),
+            UartMatch::Pattern {
+                items: vec![e(1), g, e(2)],
+                or_error: true
+            }
+        );
+        // Only gaps: nothing to look for.
+        let only = ProtocolTrigger::Uart(UartConfig::default(), UartMatch::pattern(vec![g], false));
+        assert!(only.check().is_err());
+    }
+
+    #[test]
+    fn a_pattern_can_also_fire_on_errors() {
+        // "hi" with a broken stop bit in the first character: the sequence is not there, but with
+        // or_error the broken character fires.
+        let cfg = UartConfig {
+            rx: 2,
+            baud: 100_000.0,
+            ..Default::default()
+        };
+        let mut w = Wave::new(1e6, 4000, 1 << 2);
+        w.uart(2, 100, &cfg, b"hi");
+        w.set(2, 100 + 90, 100 + 100, false);
+        let m = |or_error| {
+            ProtocolTrigger::Uart(
+                cfg.clone(),
+                UartMatch::pattern(vec![PatItem::exact(b'x')], or_error),
+            )
+        };
+        assert_eq!(run(&m(false), &w.samples, 1e6, 64), None);
+        let hit = run(&m(true), &w.samples, 1e6, 64).expect("fires on the error");
+        assert!((hit as i64 - 200).abs() <= 10, "{hit}");
+    }
+
+    #[test]
+    fn an_open_gap_keeps_its_start_in_the_window() {
+        // "h" seen, waiting for "#": with the trigger at the start, the look-back reaches back to "h".
+        let (words, cfg, end) = uart_wave(b"hello");
+        let t = ProtocolTrigger::Uart(
+            cfg,
+            pat(vec![
+                PatItem::exact(b'h'),
+                PatItem::Gap,
+                PatItem::exact(b'#'),
+            ]),
+        );
+        let mut ev = t.build(TriggerAt::Start).unwrap();
+        ev.reset(1e6);
+        ev.change(0, words[0]);
+        for i in 1..words.len() {
+            if words[i] != words[i - 1] {
+                assert_eq!(ev.change(i as u64, words[i]), None);
+            }
+        }
+        assert_eq!(ev.advance(3000), None);
+        assert!(
+            ev.lookback() >= 3000 - 100,
+            "{} (h started at 100, end {end})",
+            ev.lookback()
         );
     }
 
@@ -507,11 +782,11 @@ mod tests {
     #[test]
     fn settings_are_checked() {
         let u = UartConfig::default();
-        assert!(ProtocolTrigger::Uart(u.clone(), UartMatch::Bytes(vec![]))
+        assert!(ProtocolTrigger::Uart(u.clone(), UartMatch::bytes(&[]))
             .check()
             .is_err());
         assert!(
-            ProtocolTrigger::Uart(u.clone(), UartMatch::Bytes(vec![0; MAX_SEQUENCE + 1]))
+            ProtocolTrigger::Uart(u.clone(), UartMatch::bytes(&[0; MAX_SEQUENCE + 1]))
                 .check()
                 .is_err()
         );
@@ -520,7 +795,7 @@ mod tests {
                 data_bits: 7,
                 ..u.clone()
             },
-            UartMatch::Bytes(vec![0x80])
+            UartMatch::bytes(&[0x80])
         )
         .check()
         .is_err());
@@ -549,7 +824,7 @@ mod tests {
     #[test]
     fn the_trigger_can_be_the_start_of_the_match() {
         let (words, cfg, _) = uart_wave(b"hello world");
-        let seq = ProtocolTrigger::Uart(cfg.clone(), UartMatch::Bytes(b"lo w".to_vec()));
+        let seq = ProtocolTrigger::Uart(cfg.clone(), UartMatch::bytes(b"lo w"));
         for chunk in [1usize, 50, 4096] {
             let end = run_at(&seq, &words, 1e6, chunk, TriggerAt::End).unwrap();
             let start = run_at(&seq, &words, 1e6, chunk, TriggerAt::Start).unwrap();
@@ -561,14 +836,14 @@ mod tests {
             assert!(end > start + 300, "start {start} end {end}");
         }
         // A single item: the start is where it began, a frame of 100 samples before its end.
-        let one = ProtocolTrigger::Uart(cfg, UartMatch::Bytes(b"w".to_vec()));
+        let one = ProtocolTrigger::Uart(cfg, UartMatch::bytes(b"w"));
         let (s, e) = (
             run_at(&one, &words, 1e6, 64, TriggerAt::Start).unwrap(),
             run_at(&one, &words, 1e6, 64, TriggerAt::End).unwrap(),
         );
         assert!((e - s) as i64 >= 90 && (e - s) as i64 <= 110, "{s} {e}");
         // The look-back needed to keep the start in the window grows with the sequence.
-        let long = ProtocolTrigger::Uart(UartConfig::default(), UartMatch::Bytes(vec![0x55; 8]));
+        let long = ProtocolTrigger::Uart(UartConfig::default(), UartMatch::bytes(&[0x55; 8]));
         let (mut a, mut b) = (
             long.build(TriggerAt::End).unwrap(),
             long.build(TriggerAt::Start).unwrap(),

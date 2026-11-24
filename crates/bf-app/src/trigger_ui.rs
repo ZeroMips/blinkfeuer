@@ -7,7 +7,7 @@ use crate::setup::{
 use crate::theme;
 use crate::view::format_split;
 use bf_core::Cond;
-use bf_decode::trigger::{ProtocolTrigger, TriggerAt};
+use bf_decode::trigger::{PatItem, ProtocolTrigger, TriggerAt};
 use bf_decode::Format;
 use egui::RichText;
 
@@ -405,38 +405,32 @@ fn uart(
             ui.selectable_value(&mut p.uart_ascii, true, "Text");
             ui.selectable_value(&mut p.uart_ascii, false, "Hex");
             if before != p.uart_ascii {
-                // Keep what is typed meaningful when the notation changes.
-                if let Ok(b) = if before {
-                    crate::setup::parse_ascii_bytes(&p.uart_bytes)
+                // Keep what is typed meaningful when the notation changes. Single-bit wildcards
+                // only exist in hex: then the notation stays hex.
+                let items = if before {
+                    crate::setup::parse_text_pattern(&p.uart_bytes)
                 } else {
-                    crate::setup::parse_hex_bytes(&p.uart_bytes)
-                } {
-                    p.uart_bytes = if p.uart_ascii {
-                        b.iter()
-                            .map(|&c| {
-                                if (0x20..0x7f).contains(&c) && c != b'\\' {
-                                    (c as char).to_string()
-                                } else {
-                                    format!("\\x{c:02X}")
-                                }
-                            })
-                            .collect()
+                    crate::setup::parse_hex_pattern(&p.uart_bytes)
+                };
+                if let Ok(items) = items {
+                    if p.uart_ascii {
+                        match crate::setup::format_text_pattern(&items) {
+                            Some(text) => p.uart_bytes = text,
+                            None => p.uart_ascii = false,
+                        }
                     } else {
-                        b.iter()
-                            .map(|c| format!("{c:02X}"))
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    };
+                        p.uart_bytes = crate::setup::format_hex_pattern(&items);
+                    }
                 }
             }
         });
         let err = p
-            .uart_sequence()
-            .and_then(|b| {
-                if b.is_empty() {
-                    Err("enter at least one character".into())
-                } else {
+            .uart_pattern()
+            .and_then(|items| {
+                if items.iter().any(|i| matches!(i, PatItem::Char { .. })) {
                     Ok(())
+                } else {
+                    Err("enter at least one character".into())
                 }
             })
             .err();
@@ -444,10 +438,14 @@ fn uart(
         dim(
             ui,
             if p.uart_ascii {
-                "Escapes: \\r \\n \\t \\0 \\\\ \\xNN. Characters must follow each other directly."
+                "Escapes: \\r \\n \\t \\0 \\\\ \\xNN; X is a free nibble (\\xXX: any character), \\* any characters in between."
             } else {
-                "Hex bytes, e.g. 4F 4B 0D 0A. Characters must follow each other directly."
+                "Hex bytes, e.g. 4F 4B 0D 0A; X is a free nibble (XX: any byte, 4X), 0b1010XXXX single bits, * any characters in between."
             },
+        );
+        ui.checkbox(
+            &mut p.uart_or_error,
+            "or a character with a framing / parity error or break",
         );
     }
     trigger_point(ui, p);
