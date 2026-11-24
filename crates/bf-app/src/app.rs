@@ -2485,33 +2485,36 @@ impl App {
         let mut open = self.show_decoders;
         let names = self.layout.names.clone();
         let end = self.store.read().end().max(1);
-        egui::Window::new("Protocol Decoders")
+        let mut window = egui::Window::new("Protocol Decoders")
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
             .default_size([1240.0, 700.0])
-            .min_size([640.0, 420.0])
-            .show(ctx, |ui| {
-                let actions =
-                    decode_ui::setup_ui(ui, &mut self.setup, &mut self.decoders, &names, end);
-                for a in actions {
-                    match a {
-                        decode_ui::Action::Add(kind) => {
-                            self.add_decoder(Config::default_for(kind));
-                            self.setup.selected = self.decoders.len() - 1;
-                        }
-                        decode_ui::Action::Remove(i) => {
-                            let e = self.decoders.remove(i);
-                            self.trigger.protocol.unlink(e.handle.id.0, &e.cfg);
-                            self.layout.remove_decoder(e.handle.id.0);
-                            self.engine.remove(e.handle.id);
-                            self.selected_ann = None;
-                            self.setup.selected = self.setup.selected.saturating_sub(1);
-                        }
-                        decode_ui::Action::Rebuild(i) => self.rebuild_decoder(i),
+            .min_size([640.0, 420.0]);
+        if let Some([x, y, w, h]) = self.opts.decoders_rect {
+            // Screenshots: a fixed place and size.
+            window = window.current_pos([x, y]).fixed_size([w, h]);
+        }
+        window.show(ctx, |ui| {
+            let actions = decode_ui::setup_ui(ui, &mut self.setup, &mut self.decoders, &names, end);
+            for a in actions {
+                match a {
+                    decode_ui::Action::Add(kind) => {
+                        self.add_decoder(Config::default_for(kind));
+                        self.setup.selected = self.decoders.len() - 1;
                     }
+                    decode_ui::Action::Remove(i) => {
+                        let e = self.decoders.remove(i);
+                        self.trigger.protocol.unlink(e.handle.id.0, &e.cfg);
+                        self.layout.remove_decoder(e.handle.id.0);
+                        self.engine.remove(e.handle.id);
+                        self.selected_ann = None;
+                        self.setup.selected = self.setup.selected.saturating_sub(1);
+                    }
+                    decode_ui::Action::Rebuild(i) => self.rebuild_decoder(i),
                 }
-            });
+            }
+        });
         self.show_decoders = open;
         if let Some(rx) = self.setup.probe.request.take() {
             self.setup.probe.result = Some((rx, self.detect_baud(rx)));

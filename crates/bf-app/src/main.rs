@@ -53,6 +53,10 @@ pub struct Opts {
     pub groups: bool,
     /// Open the decoder setup window and select this decoder (index) in demo mode.
     pub decoders_window: Option<usize>,
+    /// Where the decoder setup window opens: x, y, width, height in points (screenshots).
+    pub decoders_rect: Option<[f32; 4]>,
+    /// Size of the application window in points (screenshots).
+    pub window: Option<[f32; 2]>,
     /// Search text for the annotation table, and a decoded item (index in the first decoder's first lane) to select.
     pub search: Option<String>,
     pub goto: Option<usize>,
@@ -152,6 +156,24 @@ fn parse_opts() -> Opts {
             "--decoder-setup" => {
                 o.decoders_window = Some(val().parse().expect("--decoder-setup INDEX"))
             }
+            "--decoder-setup-rect" => {
+                let v: Vec<f32> = val()
+                    .split(',')
+                    .map(|x| x.trim().parse().expect("--decoder-setup-rect X,Y,W,H"))
+                    .collect();
+                let [x, y, w, h] = v[..] else {
+                    panic!("--decoder-setup-rect X,Y,W,H")
+                };
+                o.decoders_rect = Some([x, y, w, h]);
+            }
+            "--window" => {
+                let v = val();
+                let (w, h) = v.split_once(['x', 'X']).expect("--window WxH");
+                o.window = Some([
+                    w.trim().parse().expect("--window WxH"),
+                    h.trim().parse().expect("--window WxH"),
+                ]);
+            }
             "--row-height" => o.row_height = Some(val().parse().expect("--row-height POINTS")),
             "--hover" => {
                 let v = val();
@@ -166,6 +188,9 @@ fn parse_opts() -> Opts {
                 );
                 println!(
                     "          [--markers S1,S2] [--expand] [--setup] [--write-icon PATH[,SIZE]] [--install-desktop[=DIR]]"
+                );
+                println!(
+                    "          [--window WxH] [--decoder-setup INDEX [--decoder-setup-rect X,Y,W,H]]"
                 );
                 std::process::exit(0);
             }
@@ -230,7 +255,7 @@ fn main() -> eframe::Result {
     prefer_x11_under_wslg();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1280.0, 800.0])
+            .with_inner_size(opts.window.unwrap_or([1280.0, 800.0]))
             .with_title("Blinkfeuer")
             .with_app_id(icon::APP_ID)
             .with_icon(std::sync::Arc::new(icon::icon_data())),
