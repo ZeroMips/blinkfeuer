@@ -28,8 +28,15 @@ A working first version. What is verified and what is not:
 - **SLogic16U3 with the stock firmware**: acquisition has been run on hardware at full rate with the
   analyzer's own test patterns, with exact sample counts. **Not yet tried with real probe signals.**
 - **LiteX gateware backend** (the open gateware for the same hardware, `bfcli --device litex`, selectable in the
-  application when the analyzer runs it): written from the gateware's own library and tested against a fake
-  register file, but **not yet run on the real device**. Everything except the USB calls is covered by tests.
+  application when the analyzer runs it): runs on the real device, with the analyzer's test patterns only (no
+  probe signals yet). It needs a gateware with the Link Commands fix
+  ([usb3_pipe#214](https://github.com/enjoy-digital/usb3_pipe/pull/214)); without it streams die at a few MB/s.
+  16 channels at 100 and 200 MHz (up to ~400 MB/s), 8 channels at 400 MHz and 4 channels at 800 MHz were
+  captured through the whole application, the raw stream is exact in most runs. **Known problems**: the
+  gateware's 16 KB FIFO is sensitive to host jitter at full rate (an occasional "device FIFO overflow", which
+  is reported as an error, never as silent data loss), 16 channels at 160 MHz fail in about 40% of the runs
+  (under investigation), and one USB 3 port of the test machine does not work with any firmware. Transfers are
+  kept small (512 KiB, up to 24 in flight) to stay within Linux's default `usbfs_memory_mb` of 16.
 - **FX2 analyzers with fx2lafw** (`bfcli --device fx2lafw`, selectable in the application when one is attached):
   8 channels, 20 kHz to 24 MHz, no threshold and no test patterns. Used on a Saleae Logic clone with real
   signals (UART / Modbus RTU at 16 MHz, also through usbipd under WSL). blinkfeuer loads the firmware itself
