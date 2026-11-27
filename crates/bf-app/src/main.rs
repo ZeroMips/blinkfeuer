@@ -184,7 +184,7 @@ fn parse_opts() -> Opts {
             }
             "--channels" => o.channels = Some(val().parse().expect("--channels N")),
             "-h" | "--help" => {
-                println!("blinkfeuer [--demo] [--samples N] [--rate HZ] [--channels N] [--device sim|stock|fx2lafw] [--pattern generator|counter|inputs|emulation]");
+                println!("blinkfeuer [--demo] [--samples N] [--rate HZ] [--channels N] [--device sim|stock|litex|fx2lafw] [--pattern generator|counter|inputs|emulation]");
                 println!(
                     "          [--screenshot PATH [--after SECS]] [--zoom-start S --zoom-spp P]"
                 );

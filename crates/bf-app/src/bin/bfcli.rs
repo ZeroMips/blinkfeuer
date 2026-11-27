@@ -80,9 +80,10 @@ enum Cmd {
     },
 }
 
-/// Streaming check of a counter: every sample must be the previous one plus one.
+/// Streaming check of a counter: every sample must be the previous one plus `step`.
 struct CounterCheck {
     width: usize,
+    step: u32,
     carry: Vec<u8>,
     prev: Option<u32>,
     first: Option<u32>,
@@ -92,9 +93,10 @@ struct CounterCheck {
 }
 
 impl CounterCheck {
-    fn new(width: usize) -> Self {
+    fn new(width: usize, step: u32) -> Self {
         Self {
             width,
+            step,
             carry: Vec::new(),
             prev: None,
             first: None,
@@ -115,7 +117,7 @@ impl CounterCheck {
                 u16::from_le_bytes([c[0], c[1]]) as u32
             };
             if let Some(p) = self.prev {
-                if v != (p + 1) & mask {
+                if v != (p + self.step) & mask {
                     self.breaks += 1;
                     self.first_break.get_or_insert((self.samples, p, v));
                 }
@@ -244,7 +246,13 @@ fn run(cli: Cli) -> Result<(), String> {
             if verify && (width == 0 || cfg.pattern != Pattern::Counter) {
                 return Err("--verify needs --pattern counter with 16 channels".into());
             }
-            let mut check = CounterCheck::new(width.max(1));
+            // The LiteX gateware counts in steps of the sample divider (800 MHz base clock).
+            let step = if device == "litex" {
+                (800e6 / rate).round() as u32
+            } else {
+                1
+            };
+            let mut check = CounterCheck::new(width.max(1), step);
             let mut st = dev.start(&cfg).map_err(|e| e.to_string())?;
             let t0 = Instant::now();
             let mut bytes = 0u64;

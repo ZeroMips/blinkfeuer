@@ -2720,6 +2720,10 @@ impl App {
                     self.device = DeviceChoice::Stock;
                     self.pattern = self.opts.pattern_enum().unwrap_or(Pattern::Counter);
                 }
+                Some("litex") => {
+                    self.device = DeviceChoice::Litex;
+                    self.pattern = self.opts.pattern_enum().unwrap_or(Pattern::Generator);
+                }
                 Some("fx2lafw") => {
                     self.device = DeviceChoice::Fx2lafw;
                     self.pattern = Pattern::Inputs;
