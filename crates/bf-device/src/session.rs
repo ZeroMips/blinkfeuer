@@ -1,9 +1,15 @@
-//! Capture session: a thread that reads a [`Stream`](crate::Stream), unpacks the wire bytes and appends them to the
-//! shared capture store.
+//! Capture session: a thread that reads a [`Stream`](crate::Stream) and hands the wire bytes, through a
+//! bounded queue, to a second thread that unpacks them and appends them to the shared capture store.
+//!
+//! The two stages are decoupled so that the device is serviced (its USB transfers completed and
+//! resubmitted) at the rate it delivers, whatever the store is doing: an analyzer with a small FIFO
+//! loses data if the host is late by a few tens of microseconds, while the queue absorbs a backlog of
+//! hundreds of milliseconds (a dense capture, a decoder holding the store, the machine busy).
 
 use crate::{CaptureConfig, Device, DeviceError, ReadResult, StreamReport};
 use bf_core::{EventTrigger, SharedStore, Trigger, Unpacker};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::mpsc::{sync_channel, RecvTimeoutError, TrySendError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -57,6 +63,11 @@ pub struct SessionStats {
     pub bytes: AtomicU64,
     /// Samples received.
     pub samples: AtomicU64,
+    /// Wire bytes received from the device and not yet appended to the store (the queue between
+    /// the two threads).
+    pub backlog: AtomicU64,
+    /// The largest `backlog` seen.
+    pub backlog_max: AtomicU64,
     /// The capture thread is at work.
     pub running: AtomicBool,
     phase: AtomicU8,
@@ -228,6 +239,17 @@ impl Gate {
     }
 }
 
+/// Wire buffers the queue between the USB reader and the ingest thread holds (a transfer is up to
+/// 512 KiB for the fast backends: about 256 MiB, much less at low rates).
+const QUEUE_SLOTS: usize = 512;
+
+/// What the reader hands over.
+enum Msg {
+    Data(Vec<u8>),
+    Ended,
+    Failed(DeviceError),
+}
+
 /// How a session ended.
 #[derive(Debug)]
 pub struct SessionResult {
@@ -269,15 +291,62 @@ impl Session {
         store: SharedStore,
         plan: Option<TriggerPlan>,
     ) -> Result<Session, DeviceError> {
-        let mut stream = device.start(cfg)?;
+        let stream = device.start(cfg)?;
         let stop = Arc::new(AtomicBool::new(false));
         let stats = Arc::new(SessionStats::default());
         stats.running.store(true, Ordering::SeqCst);
         if plan.is_some() {
             stats.set_phase(Phase::Filling);
         }
-        let (stop2, stats2, channels, rate) =
-            (stop.clone(), stats.clone(), cfg.channels, cfg.sample_rate);
+        let (stats2, channels, rate) = (stats.clone(), cfg.channels, cfg.sample_rate);
+        let (tx, rx) = sync_channel::<Msg>(QUEUE_SLOTS);
+        // Set by the ingest thread when it is done (trigger window complete, memory full, error).
+        let done = Arc::new(AtomicBool::new(false));
+        // The USB side: service the stream and queue what it delivers, nothing else.
+        let reader = {
+            let (stop, done, stats) = (stop.clone(), done.clone(), stats.clone());
+            std::thread::Builder::new()
+                .name("capture-usb".into())
+                .spawn(move || {
+                    let mut stream = stream;
+                    'read: while !stop.load(Ordering::Relaxed) && !done.load(Ordering::Relaxed) {
+                        let (mut msg, last) = match stream.read(Duration::from_millis(50)) {
+                            Ok(ReadResult::Data(buf)) => {
+                                let len = buf.len() as u64;
+                                stats.bytes.fetch_add(len, Ordering::Relaxed);
+                                let queued = stats.backlog.fetch_add(len, Ordering::Relaxed) + len;
+                                stats.backlog_max.fetch_max(queued, Ordering::Relaxed);
+                                (Msg::Data(buf), false)
+                            }
+                            Ok(ReadResult::Timeout) => continue,
+                            Ok(ReadResult::Ended) => (Msg::Ended, true),
+                            Err(e) => (Msg::Failed(e), true),
+                        };
+                        // A full queue: wait for the ingest thread (the device may overflow its
+                        // FIFO meanwhile, which the backend reports).
+                        loop {
+                            match tx.try_send(msg) {
+                                Ok(()) => break,
+                                Err(TrySendError::Full(m)) => {
+                                    if stop.load(Ordering::Relaxed) || done.load(Ordering::Relaxed)
+                                    {
+                                        break 'read;
+                                    }
+                                    msg = m;
+                                    std::thread::sleep(Duration::from_micros(100));
+                                }
+                                Err(TrySendError::Disconnected(_)) => break 'read,
+                            }
+                        }
+                        if last {
+                            break;
+                        }
+                    }
+                    drop(tx);
+                    stream.stop().unwrap_or_default()
+                })
+                .map_err(|e| DeviceError::Other(e.to_string()))?
+        };
         let handle = std::thread::Builder::new()
             .name("capture".into())
             .spawn(move || {
@@ -286,35 +355,40 @@ impl Session {
                 let mut words = Vec::new();
                 let mut error = None;
                 let mut gate = plan.map(|p| Gate::new(p, rate));
-                while !stop2.load(Ordering::Relaxed) {
-                    match stream.read(Duration::from_millis(50)) {
-                        Ok(ReadResult::Data(buf)) => {
-                            stats2.bytes.fetch_add(buf.len() as u64, Ordering::Relaxed);
-                            unpacker.unpack(&buf, &mut words);
-                            stats2
-                                .samples
-                                .fetch_add(words.len() as u64, Ordering::Relaxed);
-                            let done = match &mut gate {
-                                Some(g) => matches!(g.feed(&store, &words, &stats2), Flow::Done),
-                                None => {
-                                    store.write().push_samples(&words);
-                                    false
-                                }
-                            };
-                            words.clear();
-                            if done {
-                                break;
-                            }
-                        }
-                        Ok(ReadResult::Timeout) => {}
-                        Ok(ReadResult::Ended) => break,
-                        Err(e) => {
+                // Everything queued is processed, also after a stop request (the reader then ends
+                // and closes the queue): the data already received is not thrown away.
+                loop {
+                    let buf = match rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(Msg::Data(buf)) => buf,
+                        Ok(Msg::Ended) | Err(RecvTimeoutError::Disconnected) => break,
+                        Ok(Msg::Failed(e)) => {
                             error = Some(e);
                             break;
                         }
+                        Err(RecvTimeoutError::Timeout) => continue,
+                    };
+                    stats2
+                        .backlog
+                        .fetch_sub(buf.len() as u64, Ordering::Relaxed);
+                    unpacker.unpack(&buf, &mut words);
+                    stats2
+                        .samples
+                        .fetch_add(words.len() as u64, Ordering::Relaxed);
+                    let finished = match &mut gate {
+                        Some(g) => matches!(g.feed(&store, &words, &stats2), Flow::Done),
+                        None => {
+                            store.write().push_samples(&words);
+                            false
+                        }
+                    };
+                    words.clear();
+                    if finished {
+                        break;
                     }
                 }
-                let report = stream.stop().unwrap_or_default();
+                done.store(true, Ordering::SeqCst);
+                drop(rx);
+                let report = reader.join().unwrap_or_default();
                 stats2.running.store(false, Ordering::SeqCst);
                 SessionResult {
                     samples: stats2.samples.load(Ordering::Relaxed),
@@ -404,6 +478,37 @@ mod tests {
         }
         // Counter bit 0 toggles on every sample.
         assert_eq!(s.count_toggles(0, 0..500_000), 499_999);
+    }
+
+    #[test]
+    fn the_device_is_serviced_while_the_store_is_busy() {
+        // A reader of the store (the UI, a decoder) can hold it for a while: the ingest thread then
+        // waits, but the USB side keeps reading into the queue and nothing is lost.
+        let channels = ChannelCount::new(16).unwrap();
+        let rate = 50e6;
+        let store = CaptureStore::shared(StoreConfig::new(channels, rate));
+        let cfg = CaptureConfig {
+            channels,
+            sample_rate: rate,
+            limit_samples: Some(2_000_000),
+            pattern: Pattern::Counter,
+            threshold_v: 1.7,
+        };
+        let mut dev = SimDevice::new(false);
+        let guard = store.write();
+        let session = Session::start(&mut dev, &cfg, store.clone()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let queued = session.stats().backlog.load(Ordering::Relaxed);
+        assert!(
+            queued > 1_000_000,
+            "the reader should have queued data: {queued}"
+        );
+        drop(guard);
+        let res = session.join();
+        assert!(res.error.is_none());
+        assert_eq!(res.samples, 2_000_000);
+        assert_eq!(store.read().range(), 0..2_000_000);
+        assert_eq!(store.read().state_at(1_999_999), Some(1_999_999 & 0xffff));
     }
 
     #[test]

@@ -430,6 +430,20 @@ pub fn disable<B: Bus>(bus: &mut B) -> Result<(), DeviceError> {
 /// experiments (the gateware has been seen to overflow at transfer boundaries on some hosts).
 pub fn plan(rate: f64, channels: u8, limit_bytes: Option<u64>) -> RingPlan {
     let mut p = plan_ring_with(rate, channels, limit_bytes, 0);
+    // The gateware FIFO is small (16 KB, ~40 us at 400 MB/s): at high rates more, smaller transfers
+    // keep the host controller's queue fuller and its refill steps finer than the stock plan of a
+    // few 2 MiB transfers (measured on hardware at 16 ch / 200 MHz: 6 x 2 MiB overflowed in ~1 of
+    // 5-10 runs, 24 x 512 KiB in 0 of 30). The in-flight total (12 MiB) stays under the default
+    // 16 MiB usbfs budget.
+    const MAX_XFER: usize = 512 * 1024;
+    if p.xfer > MAX_XFER {
+        let total = p.xfer * p.count;
+        p.xfer = MAX_XFER;
+        p.count = (total / p.xfer).clamp(p.count, 32);
+        if let Some(lb) = limit_bytes {
+            p.count = p.count.min((lb as usize).div_ceil(p.xfer)).max(1);
+        }
+    }
     let env = |name: &str| {
         std::env::var(name)
             .ok()
@@ -1020,6 +1034,23 @@ mod tests {
             ..Default::default()
         });
         assert!(bus.read32(reg::ANALYZER_STATUS).is_err());
+    }
+
+    #[test]
+    fn high_rates_use_many_small_transfers_within_the_usbfs_budget() {
+        let p = plan(200e6, 16, None);
+        assert_eq!(p.xfer, 512 * 1024, "{p:?}");
+        assert!((22..=24).contains(&p.count), "{p:?}");
+        assert!(p.xfer * p.count <= 16 * 1024 * 1024);
+        // Slow rates keep the ~5 ms transfers.
+        let slow = plan(10e6, 16, None);
+        assert!(slow.xfer <= 512 * 1024 && slow.count >= 4, "{slow:?}");
+        // A finite capture never keeps more transfers in flight than it needs (the ring resubmits).
+        let finite = plan(200e6, 16, Some(1_500_000));
+        assert!(
+            finite.xfer <= 512 * 1024 && (1..=3).contains(&finite.count),
+            "{finite:?}"
+        );
     }
 
     #[test]
