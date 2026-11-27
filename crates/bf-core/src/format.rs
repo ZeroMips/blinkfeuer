@@ -118,7 +118,24 @@ impl Unpacker {
                 }
                 let whole = data.len() / width * width;
                 out.reserve(whole / width);
-                out.extend(data[..whole].chunks_exact(width).map(le_word));
+                // Fixed-size chunks: the widening loops vectorize (the generic word loop does not).
+                if width == 2 {
+                    out.extend(
+                        data[..whole]
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|c| u16::from_le_bytes(*c) as u32),
+                    );
+                } else {
+                    out.extend(
+                        data[..whole]
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .map(|c| u32::from_le_bytes(*c)),
+                    );
+                }
                 let rest = &data[whole..];
                 self.carry[..rest.len()].copy_from_slice(rest);
                 self.carry_len += rest.len();

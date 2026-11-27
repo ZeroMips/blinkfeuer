@@ -161,6 +161,9 @@ pub struct CaptureStore {
     /// Samples before this one are hidden (a capture cut to its pre-trigger window).
     floor: u64,
     trigger: Option<u64>,
+    /// Scratch for the ingest of one block: events found and their xor with the previous state.
+    scratch_ev: Vec<Event>,
+    scratch_x: Vec<u32>,
 }
 
 impl CaptureStore {
@@ -184,6 +187,8 @@ impl CaptureStore {
             generation: 0,
             floor: 0,
             trigger: None,
+            scratch_ev: Vec::new(),
+            scratch_x: Vec::new(),
         }
     }
 
@@ -317,22 +322,41 @@ impl CaptureStore {
             let room = (block - off % block) as usize;
             let n = room.min(s.len());
             let base = (c.blocks.len() - 1) * nch;
+            // Pass 1: the events of this part of the block, branch-free (every sample is written
+            // at the next free slot, which advances only when the state changed), with runs of
+            // unchanged samples skipped a group at a time.
+            if self.scratch_ev.len() < block as usize {
+                self.scratch_ev
+                    .resize(block as usize, Event { off: 0, state: 0 });
+                self.scratch_x.resize(block as usize, 0);
+            }
+            let (ev, xs) = (&mut self.scratch_ev, &mut self.scratch_x);
             let mut last = c.last_state;
-            for (i, &w) in s[..n].iter().enumerate() {
-                if w != last {
-                    c.events.push(Event {
-                        off: off + i as u32,
+            let mut k = 0usize;
+            for (g, grp) in s[..n].chunks(16).enumerate() {
+                // Unchanged group: a reduction (vectorizes), not an early-exit comparison.
+                if grp.iter().fold(0u32, |a, &w| a | (w ^ last)) == 0 {
+                    continue;
+                }
+                let at = off + (g * 16) as u32;
+                for (j, &w) in grp.iter().enumerate() {
+                    let x = w ^ last;
+                    ev[k] = Event {
+                        off: at + j as u32,
                         state: w,
-                    });
-                    let mut x = w ^ last;
-                    while x != 0 {
-                        let ch = x.trailing_zeros() as usize;
-                        let cnt = &mut c.counts[base + ch];
-                        *cnt = cnt.saturating_add(1);
-                        x &= x - 1;
-                    }
+                    };
+                    xs[k] = x;
+                    k += (x != 0) as usize;
                     last = w;
                 }
+            }
+            c.events.extend_from_slice(&ev[..k]);
+            // Pass 2: per-channel transition counts from the xors.
+            let acc = &mut c.counts[base..base + nch];
+            match nch {
+                0..=8 => count_transitions::<8>(&xs[..k], acc),
+                9..=16 => count_transitions::<16>(&xs[..k], acc),
+                _ => count_transitions::<32>(&xs[..k], acc),
             }
             c.last_state = last;
             c.len += n as u32;
@@ -588,6 +612,23 @@ impl CaptureStore {
                 edges: self.count_toggles(ch, c0..c1).min(u32::MAX as u64) as u32,
             });
         }
+    }
+}
+
+/// Add, per channel, the number of `xs` words having that bit set to `acc` (saturating). `N` is a
+/// lane count of at least `acc.len()`, fixed so that the loop vectorizes.
+fn count_transitions<const N: usize>(xs: &[u32], acc: &mut [u16]) {
+    let mut lanes = [0u16; N];
+    for (l, a) in lanes.iter_mut().zip(acc.iter()) {
+        *l = *a;
+    }
+    for &x in xs {
+        for (ch, l) in lanes.iter_mut().enumerate() {
+            *l = l.saturating_add(((x >> ch) & 1) as u16);
+        }
+    }
+    for (a, l) in acc.iter_mut().zip(lanes.iter()) {
+        *a = *l;
     }
 }
 
